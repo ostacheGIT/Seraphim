@@ -11,6 +11,7 @@ from seraphim import __version__
 from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.engine.ollama import engine
 from seraphim.settings import settings
+from seraphim.memory.store import init_db, load_history, list_sessions, delete_session
 
 app = FastAPI(
     title="Seraphim",
@@ -120,3 +121,20 @@ async def chat_stream(req: ChatRequest):
             yield token
 
     return StreamingResponse(token_generator(), media_type="text/plain")
+
+@app.get("/memory/sessions")
+async def get_sessions():
+    await init_db()
+    return await list_sessions()
+
+@app.get("/memory/sessions/{session_id}")
+async def get_session_history(session_id: str, limit: int = 20):
+    await init_db()
+    messages = await load_history(session_id, limit=limit)
+    return {"session": session_id, "messages": messages}
+
+@app.delete("/memory/sessions/{session_id}")
+async def remove_session(session_id: str):
+    await init_db()
+    await delete_session(session_id)
+    return {"deleted": session_id}

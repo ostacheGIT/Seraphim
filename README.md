@@ -14,7 +14,7 @@
 
 ---
 
-## ✨ Philosophy
+## Philosophy
 
 - **Local by default** — everything runs on your hardware via Ollama
 - **Simple to install** — one command to get started
@@ -24,7 +24,7 @@
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -33,6 +33,7 @@
 | Python 3.10+ | [python.org](https://python.org) |
 | [uv](https://astral.sh/uv) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | [Ollama](https://ollama.com) | [ollama.com](https://ollama.com) |
+| Rust | curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh |
 | Git | [git-scm.com](https://git-scm.com) |
 
 ### Setup
@@ -60,7 +61,7 @@ Open your browser at `http://localhost:7272` and start chatting 🎉
 
 ---
 
-## 🤖 Built-in Agents
+## Built-in Agents
 
 | Agent | Description |
 |-------|-------------|
@@ -78,7 +79,7 @@ uv run seraphim ask "Summarize my notes" --agent memory
 
 ---
 
-## 🧩 Skills
+## Skills
 
 Skills extend agents with new capabilities. Install from community sources or write your own:
 
@@ -96,31 +97,6 @@ seraphim skill new my-custom-skill
 
 ---
 
-## ⚙️ Configuration
-
-Config files live in `configs/seraphim/`. The main config:
-
-```yaml
-# configs/seraphim/config.yaml
-engine:
-  provider: ollama
-  model: llama3.2
-  base_url: http://localhost:11434
-
-server:
-  host: 0.0.0.0
-  port: 7272
-
-memory:
-  backend: sqlite
-  path: ~/.seraphim/memory.db
-
-agents:
-  default: chat
-```
-
----
-
 ## 🗺️ Roadmap
 
 - [x] Core engine (Ollama integration)
@@ -132,12 +108,6 @@ agents:
 - [ ] Voice input/output
 - [ ] Plugin marketplace
 - [ ] Multi-agent orchestration
-
----
-
-## 🙏 Acknowledgements
-
-Seraphim is inspired by and built upon [OpenJarvis](https://github.com/open-jarvis/OpenJarvis) by the Stanford Scaling Intelligence Lab, licensed under Apache 2.0.
 
 ---
 
