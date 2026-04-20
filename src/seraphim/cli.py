@@ -77,7 +77,8 @@ def ask(
     """Ask Seraphim a question."""
 
     async def _ask():
-        from seraphim.agents.base import AgentContext, get_agent
+        from seraphim.agents.base import get_agent
+        from seraphim.agents.core import AgentContext
         from seraphim.engine.ollama import engine as eng
         from seraphim.memory.store import init_db, load_history, save_message
 
