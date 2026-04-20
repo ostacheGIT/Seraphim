@@ -174,7 +174,7 @@ def doctor():
         # Model
         if ok:
             models = await engine.list_models()
-            has_model = settings.engine.model in models
+            has_model = any(settings.engine.model in m for m in models)
             status = "[green]✓[/green]" if has_model else "[yellow]⚠[/yellow]"
             console.print(f"  {status} Default model '{settings.engine.model}'")
             if not has_model:
