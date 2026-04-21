@@ -63,7 +63,13 @@ npm run tauri dev
 
 
 
-quick start : 
+quick start :
+$env:PATH += ";C:\Users\ostap\AppData\Local\Programs\Ollama"
+$env:Path = "C:\Users\ostap\.local\bin;$env:Path"
+$env:PATH += ";C:\Users\ostap\.cargo\bin"
+$env:PATH += ";C:\Program Files\nodejs"
+$env:PATH += ";C:\Users\ostap\.cargo\bin"
+
 terminal 1 :  uv run seraphim serve
 terminal 2 :  npm run tauri dev
 

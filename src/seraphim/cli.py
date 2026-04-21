@@ -67,12 +67,12 @@ def init():
 
 @app.command()
 def ask(
-    query: str = typer.Argument(..., help="Your question or instruction"),
-    agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, researcher"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model"),
-    stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream the response"),
-    session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID for memory"),
-    no_memory: bool = typer.Option(False, "--no-memory", help="Disable memory for this query"),
+        query: str = typer.Argument(..., help="Your question or instruction"),
+        agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, researcher"),
+        model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model"),
+        stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream the response"),
+        session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID for memory"),
+        no_memory: bool = typer.Option(False, "--no-memory", help="Disable memory for this query"),
 ):
     """Ask Seraphim a question."""
 
@@ -118,9 +118,9 @@ def ask(
 
 @app.command()
 def history(
-    session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID to display"),
-    list_all: bool = typer.Option(False, "--list", "-l", help="List all sessions"),
-    delete: Optional[str] = typer.Option(None, "--delete", "-d", help="Delete a session"),
+        session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID to display"),
+        list_all: bool = typer.Option(False, "--list", "-l", help="List all sessions"),
+        delete: Optional[str] = typer.Option(None, "--delete", "-d", help="Delete a session"),
 ):
     """Browse or manage conversation history."""
 
@@ -164,9 +164,9 @@ def history(
 
 @app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0", help="Host to bind"),
-    port: int = typer.Option(7272, help="Port to listen on"),
-    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
+        host: str = typer.Option("0.0.0.0", help="Host to bind"),
+        port: int = typer.Option(7272, help="Port to listen on"),
+        reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
 ):
     """Start the Seraphim web server."""
     console.print(f"[bold cyan]Starting Seraphim server[/bold cyan] at http://{host}:{port}")
@@ -237,6 +237,11 @@ def doctor():
 def show_version():
     """Show Seraphim version."""
     console.print(f"Seraphim v{version}")
+
+
+# ── Commande vocale ──────────────────────────────────────────────────────────
+from seraphim.voice.cli_voice import listen_command
+app.command("listen")(listen_command)
 
 
 if __name__ == "__main__":

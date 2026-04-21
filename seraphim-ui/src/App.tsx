@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import TitleBar from "./components/TitleBar";
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
@@ -21,57 +21,60 @@ export default function App() {
     addMessage,
   } = useConversation();
 
-  const { isListening, toggle: toggleVoice } = useVoice({
-    onResult: (transcript) => setInput(transcript),
-  });
-
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || isThinking) return;
+  const sendMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isThinking) return;
     setInput("");
-    addMessage(text, "user");
+    addMessage(trimmed, "user");
     setIsThinking(true);
-
     try {
-      const response = await askSeraphim(text);
+      const response = await askSeraphim(trimmed);
       addMessage(response, "assistant", "done");
     } catch {
       addMessage(
-        "Erreur : impossible de contacter le backend Seraphim.",
-        "assistant",
-        "error"
+          "Erreur : impossible de contacter le backend Seraphim.",
+          "assistant",
+          "error"
       );
     } finally {
       setIsThinking(false);
     }
+  }, [isThinking, addMessage]);
+
+  const { isListening, toggle: toggleVoice } = useVoice({
+    onResult: (transcript) => {
+      sendMessage(transcript);
+    },
+  });
+
+  async function handleSend() {
+    await sendMessage(input);
   }
 
   return (
-    <div data-theme={theme} className="app-root">
-      <TitleBar
-        theme={theme}
-        onThemeToggle={() =>
-          setTheme((t) => (t === "dark" ? "light" : "dark"))
-        }
-      />
-      <div className="app-layout">
-        <Sidebar
-          conversations={conversations}
-          activeId={activeId}
-          onSelect={setActiveId}
-          onNew={newConversation}
-          onDelete={deleteConversation}
+      <div className="app-root" data-theme={theme}>
+        <TitleBar
+            theme={theme}
+            onThemeToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         />
-        <ChatWindow
-          conversation={active}
-          isListening={isListening}
-          isThinking={isThinking}
-          input={input}
-          onInputChange={setInput}
-          onSend={handleSend}
-          onVoiceToggle={toggleVoice}
-        />
+        <div className="app-layout">
+          <Sidebar
+              conversations={conversations}
+              activeId={activeId}
+              onSelect={setActiveId}
+              onNew={newConversation}
+              onDelete={deleteConversation}
+          />
+          <ChatWindow
+              conversation={active}
+              isListening={isListening}
+              isThinking={isThinking}
+              input={input}
+              onInputChange={setInput}
+              onSend={handleSend}
+              onVoiceToggle={toggleVoice}
+          />
+        </div>
       </div>
-    </div>
   );
 }
