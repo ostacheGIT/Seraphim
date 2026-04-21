@@ -36,7 +36,12 @@
 | Rust | curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh |
 | Git | [git-scm.com](https://git-scm.com) |
 
-backend terminal 1 : 
+backend terminal 1 :
+winget install Ollama.Ollama
+$env:PATH += ";C:\Users\ostap\AppData\Local\Programs\Ollama"
+ollama pull llama3.2
+uv run seraphim serve
+
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 $env:Path = "C:\Users\ostap\.local\bin;$env:Path"                                     (powershell)
 uv sync
@@ -57,6 +62,10 @@ npm install
 npm run tauri dev
 
 
+
+quick start : 
+terminal 1 :  uv run seraphim serve
+terminal 2 :  npm run tauri dev
 
 
 ### Setup
