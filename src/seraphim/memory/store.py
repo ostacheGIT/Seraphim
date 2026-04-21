@@ -5,6 +5,7 @@ from pathlib import Path
 DB_PATH = Path.home() / ".seraphim" / "memory.db"
 
 async def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS conversations (

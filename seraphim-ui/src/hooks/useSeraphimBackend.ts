@@ -31,7 +31,7 @@ export async function askSeraphim(
     body: JSON.stringify({
       query: message,
       agent: "chat",
-      model: "llama3.2:1b",  // ← plus rapide sur 4GB VRAM
+      model: "qwen2.5:3b",  // ← plus rapide sur 4GB VRAM
       messages: [],
     }),
   });

@@ -39,11 +39,11 @@
 backend terminal 1 :
 winget install Ollama.Ollama
 $env:PATH += ";C:\Users\ostap\AppData\Local\Programs\Ollama"
-ollama pull llama3.2
+ollama pull llama3.2:1b
 uv run seraphim serve
 
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-$env:Path = "C:\Users\ostap\.local\bin;$env:Path"                                     (powershell)
+$env:Path = "C:\Users\ostap\.local\bin;$env:Path"                                    
 uv sync
 
 frontend terminal 2 : 
