@@ -138,3 +138,19 @@ async def remove_session(session_id: str):
     await init_db()
     await delete_session(session_id)
     return {"deleted": session_id}
+
+# Dans src/seraphim/api/app.py
+@app.get("/memory/sessions")
+async def get_sessions():
+    await init_db()
+    sessions = await list_sessions()
+    # Assure que chaque session a bien title + updated_at
+    # Si list_sessions() renvoie juste des strings, adapte comme suit :
+    return [
+        {
+            "session_id": s if isinstance(s, str) else s["session_id"],
+            "title": s.get("title", s["session_id"]) if isinstance(s, dict) else s,
+            "updated_at": s.get("updated_at", None) if isinstance(s, dict) else None,
+        }
+        for s in sessions
+    ]

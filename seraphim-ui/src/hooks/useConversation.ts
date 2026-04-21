@@ -1,90 +1,59 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Conversation, Message } from "../types";
+
+const API = "http://localhost:8000";
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
-const SEED: Conversation[] = [
-  {
-    id: "1",
-    title: "Ouvre Chrome et va sur YouTube",
-    messages: [
-      {
-        id: "m1",
-        role: "assistant",
-        content:
-          "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous — je peux ouvrir des apps, gérer vos fichiers, envoyer des mails et bien plus encore.",
-        timestamp: new Date(Date.now() - 120000),
-        status: "done",
-      },
-      {
-        id: "m2",
-        role: "user",
-        content: "Ouvre Chrome et va sur YouTube",
-        timestamp: new Date(Date.now() - 60000),
-        status: "done",
-      },
-      {
-        id: "m3",
-        role: "assistant",
-        content: "Compris. J'ouvre Chrome et navigue vers YouTube...",
-        timestamp: new Date(Date.now() - 55000),
-        status: "done",
-      },
-    ],
-    createdAt: new Date(Date.now() - 200000),
-    updatedAt: new Date(Date.now() - 55000),
-  },
-  {
-    id: "2",
-    title: "Envoie un mail à Marc",
-    messages: [
-      {
-        id: "m4",
-        role: "assistant",
-        content: "Bonjour ! Je suis Seraphim. Comment puis-je vous aider ?",
-        timestamp: new Date(Date.now() - 300000),
-        status: "done",
-      },
-    ],
-    createdAt: new Date(Date.now() - 400000),
-    updatedAt: new Date(Date.now() - 300000),
-  },
-  {
-    id: "3",
-    title: "Crée un dossier Projets",
-    messages: [
-      {
-        id: "m5",
-        role: "assistant",
-        content: "Prêt à vous aider.",
-        timestamp: new Date(Date.now() - 500000),
-        status: "done",
-      },
-    ],
-    createdAt: new Date(Date.now() - 600000),
-    updatedAt: new Date(Date.now() - 500000),
-  },
-  {
-    id: "4",
-    title: "Refactor auth module",
-    messages: [],
-    createdAt: new Date(Date.now() - 86400000),
-    updatedAt: new Date(Date.now() - 86400000),
-  },
-  {
-    id: "5",
-    title: "Résumé mes notes",
-    messages: [],
-    createdAt: new Date(Date.now() - 90000000),
-    updatedAt: new Date(Date.now() - 90000000),
-  },
-];
-
 export function useConversation() {
-  const [conversations, setConversations] = useState<Conversation[]>(SEED);
-  const [activeId, setActiveId] = useState<string>("1");
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchSessions() {
+      try {
+        const res = await fetch(`${API}/memory/sessions`);
+        const raw = (await res.json()) as { session: string; preview: string; timestamp: string }[];
+        const convos: Conversation[] = raw.map((s) => ({
+          id: s.session,
+          title: s.preview.slice(0, 42) + (s.preview.length > 42 ? "..." : ""),
+          messages: [],
+          createdAt: new Date(s.timestamp),
+          updatedAt: new Date(s.timestamp),
+        }));
+        setConversations(convos);
+        if (convos.length > 0) setActiveId(convos[0].id);
+      } catch (e) {
+        console.error("Impossible de charger les sessions:", e);
+      }
+    }
+    void fetchSessions();
+  }, []);
+
+  const selectConversation = useCallback(async (id: string) => {
+    setActiveId(id);
+    try {
+      const res = await fetch(`${API}/memory/sessions/${id}`);
+      const raw2 = (await res.json()) as {
+        session: string;
+        messages: { role: string; content: string }[];
+      };
+      const messages: Message[] = raw2.messages.map((m): Message => ({
+        id: generateId(),
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        timestamp: new Date(),
+        status: "done",
+      }));
+      setConversations((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, messages } : c))
+      );
+    } catch (e) {
+      console.error("Impossible de charger les messages:", e);
+    }
+  }, []);
 
   const active = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -97,8 +66,7 @@ export function useConversation() {
         {
           id: generateId(),
           role: "assistant",
-          content:
-            "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
+          content: "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
           timestamp: new Date(),
           status: "done",
         },
@@ -111,56 +79,50 @@ export function useConversation() {
   }, []);
 
   const deleteConversation = useCallback(
-    (id: string) => {
-      setConversations((prev) => {
-        const remaining = prev.filter((c) => c.id !== id);
-        if (activeId === id && remaining.length > 0) {
-          setActiveId(remaining[0].id);
+      async (id: string) => {
+        try {
+          await fetch(`${API}/memory/sessions/${id}`, { method: "DELETE" });
+        } catch (e) {
+          console.error("Erreur suppression session:", e);
         }
-        return remaining;
-      });
-    },
-    [activeId]
+        setConversations((prev) => {
+          const remaining = prev.filter((c) => c.id !== id);
+          if (activeId === id && remaining.length > 0) setActiveId(remaining[0].id);
+          return remaining;
+        });
+      },
+      [activeId]
   );
 
   const addMessage = useCallback(
-    (
-      content: string,
-      role: "user" | "assistant",
-      status?: Message["status"]
-    ) => {
-      const msg: Message = {
-        id: generateId(),
-        role,
-        content,
-        timestamp: new Date(),
-        status,
-      };
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id !== activeId) return c;
-          const title =
-            c.title === "Nouvelle conversation" && role === "user"
-              ? content.slice(0, 42)
-              : c.title;
-          return {
-            ...c,
-            title,
-            messages: [...c.messages, msg],
-            updatedAt: new Date(),
-          };
-        })
-      );
-      return msg.id;
-    },
-    [activeId]
+      (content: string, role: "user" | "assistant", status?: Message["status"]) => {
+        const msg: Message = {
+          id: generateId(),
+          role,
+          content,
+          timestamp: new Date(),
+          status,
+        };
+        setConversations((prev) =>
+            prev.map((c) => {
+              if (c.id !== activeId) return c;
+              const title =
+                  c.title === "Nouvelle conversation" && role === "user"
+                      ? content.slice(0, 42) + (content.length > 42 ? "..." : "")
+                      : c.title;
+              return { ...c, title, messages: [...c.messages, msg], updatedAt: new Date() };
+            })
+        );
+        return msg.id;
+      },
+      [activeId]
   );
 
   return {
     conversations,
     activeId,
     active,
-    setActiveId,
+    setActiveId: selectConversation,
     newConversation,
     deleteConversation,
     addMessage,
