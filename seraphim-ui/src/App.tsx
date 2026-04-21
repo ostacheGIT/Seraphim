@@ -5,7 +5,6 @@ import ChatWindow from "./components/ChatWindow";
 import { useConversation } from "./hooks/useConversation";
 import { useVoice } from "./hooks/useVoice";
 import { askSeraphim } from "./hooks/useSeraphimBackend";
-import "./styles/globals.css";
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");

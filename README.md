@@ -36,6 +36,29 @@
 | Rust | curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh |
 | Git | [git-scm.com](https://git-scm.com) |
 
+backend terminal 1 : 
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+$env:Path = "C:\Users\ostap\.local\bin;$env:Path"                                     (powershell)
+uv sync
+
+frontend terminal 2 : 
+
+telecharger les visual C++ tools : https://visualstudio.microsoft.com/fr/visual-cpp-build-tools/
+coche obligatoirement : "Développement Desktop en C++" (C++ build tools) Clique Installer.
+$env:PATH += ";C:\Users\ostap\.cargo\bin"
+
+https://nodejs.org             (rouvrir le PS ou bien ajouter le path manuellement :  $env:PATH += ";C:\Program Files\nodejs" )
+node --version
+
+winget install Rustlang.Rustup
+$env:PATH += ";C:\Users\ostap\.cargo\bin"
+
+npm install
+npm run tauri dev
+
+
+
+
 ### Setup
 
 ```bash
