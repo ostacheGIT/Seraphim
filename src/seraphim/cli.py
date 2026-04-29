@@ -71,8 +71,14 @@ def init():
 @app.command()
 def ask(
         query: str = typer.Argument(..., help="Your question or instruction"),
-        agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, researcher"),
-        model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model"),
+        agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, researcher, react"),
+        model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model (compat)"),
+        engine: Optional[str] = typer.Option(
+            None,
+            "--engine",
+            "-e",
+            help="Engine ID (e.g. ollama_qwen3b, ollama_qwen7b). Overrides --model.",
+        ),
         stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream the response"),
         session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID for memory"),
         no_memory: bool = typer.Option(False, "--no-memory", help="Disable memory for this query"),
@@ -82,11 +88,31 @@ def ask(
     async def _ask():
         from seraphim.agents.base import get_agent
         from seraphim.agents.core import AgentContext
-        from seraphim.engine.ollama import engine as eng
+        from seraphim.agents.react import ReactAgent
+        from seraphim.engine import get_engine
         from seraphim.memory.store import init_db, load_history, save_message
 
-        ag = get_agent(agent)
         sess = session or str(uuid.uuid4())[:8]
+
+        # Choix de l'engine_id:
+        engine_id: Optional[str] = engine
+        if engine_id is None and model:
+            if "7b" in model:
+                engine_id = "ollama_qwen7b"
+            else:
+                engine_id = "ollama_qwen3b"
+
+        # Vérifie que l'engine existe si spécifié
+        if engine_id is not None:
+            _ = get_engine(engine_id)
+
+        # Instancie l'agent
+        if agent == "react":
+            ag = ReactAgent(engine_id=engine_id)
+        else:
+            ag = get_agent(agent)
+            if hasattr(ag, "engine_id"):
+                ag.engine_id = engine_id  # type: ignore[assignment]
 
         ctx = AgentContext()
         ctx.add_system(ag.system_prompt)
@@ -100,16 +126,18 @@ def ask(
         ctx.add_user(query)
 
         if stream:
-            console.print(f"[dim]Seraphim ({agent}) [{sess}] ›[/dim] ", end="")
-            full_response = ""
-            async for token in eng.stream_chat(ctx.messages):
-                console.print(token, end="", highlight=False)
-                full_response += token
-            console.print()
+            console.print(
+                f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",
+                end="",
+            )
+            full_response = await ag.run(query, ctx)
+            console.print(full_response)
         else:
             with console.status("[dim]Thinking...[/dim]"):
                 full_response = await ag.run(query, ctx)
-            console.print(f"[dim]Seraphim ({agent}) [{sess}] ›[/dim]")
+            console.print(
+                f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim]"
+            )
             console.print(Markdown(full_response))
 
         if not no_memory:

@@ -3,6 +3,8 @@ import { Conversation, Message } from "../types";
 
 const API = "http://localhost:7272";
 
+export type EngineId = "ollama_qwen3b" | "ollama_qwen7b";
+
 function generateId(): string {
   return Math.random().toString(36).slice(2, 9);
 }
@@ -10,6 +12,7 @@ function generateId(): string {
 export function useConversation() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [engineId, setEngineId] = useState<EngineId>("ollama_qwen3b");
 
   useEffect(() => {
     async function fetchSessions() {
@@ -17,16 +20,16 @@ export function useConversation() {
         const res = await fetch(`${API}/memory/sessions`);
         const raw = (await res.json()) as {
           session_id: string;
-          title:      string;
-          agent:      string;
+          title: string;
+          agent: string;
           updated_at: string;
         }[];
         const convos: Conversation[] = raw.map((s) => ({
-          id:        s.session_id,
-          title:     s.title
+          id: s.session_id,
+          title: s.title
               ? s.title.slice(0, 42) + (s.title.length > 42 ? "..." : "")
               : s.session_id,
-          messages:  [],
+          messages: [],
           createdAt: new Date(s.updated_at),
           updatedAt: new Date(s.updated_at),
         }));
@@ -44,18 +47,18 @@ export function useConversation() {
     try {
       const res = await fetch(`${API}/memory/sessions/${id}`);
       const raw2 = (await res.json()) as {
-        session:  string;
+        session: string;
         messages: { role: string; content: string }[];
       };
       const messages: Message[] = raw2.messages.map((m): Message => ({
-        id:        generateId(),
-        role:      m.role as "user" | "assistant",
-        content:   m.content,
+        id: generateId(),
+        role: m.role as "user" | "assistant",
+        content: m.content,
         timestamp: new Date(),
-        status:    "done",
+        status: "done",
       }));
       setConversations((prev) =>
-          prev.map((c) => (c.id === id ? { ...c, messages } : c))
+          prev.map((c) => (c.id === id ? { ...c, messages } : c)),
       );
     } catch (e) {
       console.error("Impossible de charger les messages:", e);
@@ -71,11 +74,12 @@ export function useConversation() {
       title: "Nouvelle conversation",
       messages: [
         {
-          id:        generateId(),
-          role:      "assistant",
-          content:   "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
+          id: generateId(),
+          role: "assistant",
+          content:
+              "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
           timestamp: new Date(),
-          status:    "done",
+          status: "done",
         },
       ],
       createdAt: new Date(),
@@ -94,17 +98,18 @@ export function useConversation() {
         }
         setConversations((prev) => {
           const remaining = prev.filter((c) => c.id !== id);
-          if (activeId === id && remaining.length > 0) setActiveId(remaining[0].id);
+          if (activeId === id && remaining.length > 0)
+            setActiveId(remaining[0].id);
           return remaining;
         });
       },
-      [activeId]
+      [activeId],
   );
 
   const addMessage = useCallback(
       (content: string, role: "user" | "assistant", status?: Message["status"]) => {
         const msg: Message = {
-          id:        generateId(),
+          id: generateId(),
           role,
           content,
           timestamp: new Date(),
@@ -117,18 +122,25 @@ export function useConversation() {
                   c.title === "Nouvelle conversation" && role === "user"
                       ? content.slice(0, 42) + (content.length > 42 ? "..." : "")
                       : c.title;
-              return { ...c, title, messages: [...c.messages, msg], updatedAt: new Date() };
-            })
+              return {
+                ...c,
+                title,
+                messages: [...c.messages, msg],
+                updatedAt: new Date(),
+              };
+            }),
         );
         return msg.id;
       },
-      [activeId]
+      [activeId],
   );
 
   return {
     conversations,
     activeId,
     active,
+    engineId,
+    setEngineId,
     setActiveId: selectConversation,
     newConversation,
     deleteConversation,

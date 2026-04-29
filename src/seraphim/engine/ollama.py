@@ -1,92 +1,85 @@
-"""
-Seraphim Engine — local inference via Ollama.
-"""
+from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 import httpx
 
-from seraphim.settings import settings
+from seraphim.engine.base import ChatMessage, ChatResult, LLMEngine
 
 
 class OllamaEngine:
-    """Thin async wrapper around the Ollama REST API."""
+    """
+    Implémentation LLMEngine pour Ollama via /api/generate.
 
-    def __init__(self) -> None:
-        self.base_url = settings.engine.base_url
-        self.model = settings.engine.model
-        self.temperature = settings.engine.temperature
+    Utilise un modèle local (par ex. 'qwen2.5:3b') tel qu'affiché par /api/tags.
+    """
 
-    async def health_check(self) -> bool:
-        """Return True if Ollama is reachable."""
-        try:
-            async with httpx.AsyncClient(timeout=3) as client:
-                r = await client.get(f"{self.base_url}/api/tags")
-                return r.status_code == 200
-        except Exception:
-            return False
+    id = "ollama"
+    name = "Ollama"
 
-    async def list_models(self) -> list[str]:
-        """Return available local models."""
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{self.base_url}/api/tags")
-            r.raise_for_status()
-            data = r.json()
-            return [m["name"] for m in data.get("models", [])]
+    def __init__(
+            self,
+            model: str = "qwen2.5:3b",  # adapté à ton /api/tags
+            base_url: str = "http://localhost:11434",
+            timeout: float = 120.0,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
 
     async def chat(
-        self,
-        messages: list[dict[str, str]],
-        model: str | None = None,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> str:
-        """Send a chat request and return the full response text."""
-        payload = {
-            "model": model or self.model,
-            "messages": messages,
-            "stream": stream,
-            "options": {
-                "temperature": kwargs.get("temperature", self.temperature),
-            },
+            self,
+            messages: List[ChatMessage],
+            tools: Optional[List[Dict[str, Any]]] = None,
+            **kwargs: Any,
+    ) -> ChatResult:
+        """
+        Simule un chat en concaténant les messages en un prompt unique.
+        """
+
+        prompt_parts: List[str] = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "") or ""
+            if role == "system":
+                prompt_parts.append(f"[SYSTEM] {content}\n")
+            elif role == "user":
+                prompt_parts.append(f"[USER] {content}\n")
+            elif role == "assistant":
+                prompt_parts.append(f"[ASSISTANT] {content}\n")
+            else:
+                prompt_parts.append(f"[{role.upper()}] {content}\n")
+
+        prompt = "\n".join(prompt_parts).strip()
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
         }
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.post(f"{self.base_url}/api/chat", json=payload)
+        # kwargs -> options Ollama (temperature, top_p, etc.) si besoin
+        if kwargs:
+            payload.update(kwargs)
+
+        async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout,
+        ) as client:
+            r = await client.post("/api/generate", json=payload)
             r.raise_for_status()
             data = r.json()
-            return data["message"]["content"]
 
-    async def stream_chat(
-        self,
-        messages: list[dict[str, str]],
-        model: str | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        """Stream a chat response token by token."""
-        import json
+        content = data.get("response", "") or ""
 
-        payload = {
-            "model": model or self.model,
-            "messages": messages,
-            "stream": True,
-            "options": {
-                "temperature": kwargs.get("temperature", self.temperature),
-            },
-        }
+        messages_out: List[ChatMessage] = [
+            ChatMessage(
+                role="assistant",
+                content=content,
+            )
+        ]
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream(
-                "POST", f"{self.base_url}/api/chat", json=payload
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.strip():
-                        chunk = json.loads(line)
-                        if token := chunk.get("message", {}).get("content", ""):
-                            yield token
-
-
-# Module-level engine singleton
-engine = OllamaEngine()
+        return ChatResult(
+            messages=messages_out,
+            usage=None,
+        )

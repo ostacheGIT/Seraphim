@@ -434,3 +434,46 @@ html, body, #root {
     background: rgba(160,100,255,0.18);
     border-color: rgba(180,140,255,0.6);
 }
+
+
+/* ─── Bouton engine selector───────────────────────────────────────────── */
+
+/* Bloc du sélecteur moteur dans le panneau de gauche */
+.engine-block {
+    margin: 0.75rem 1rem 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+/* Alignement avec tes section-label (utilisées pour les groupes de conversations) */
+.engine-block .section-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--sidebar-section-label, #8892b0);
+}
+
+/* Select stylé comme un input de la sidebar */
+.engine-select {
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.45rem;
+    border: 1px solid var(--sidebar-border, #233554);
+    background: var(--sidebar-bg, #0b1120);
+    color: var(--sidebar-fg, #e2e8f0);
+    font-size: 0.8rem;
+    outline: none;
+    appearance: none;
+    cursor: pointer;
+}
+
+/* Hover / focus dans l’esprit de tes boutons */
+.engine-select:hover {
+    border-color: var(--accent, #38bdf8);
+}
+
+.engine-select:focus {
+    border-color: var(--accent, #38bdf8);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #38bdf8) 40%, transparent);
+}

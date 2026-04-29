@@ -12,6 +12,8 @@ export default function App() {
     conversations,
     activeId,
     active,
+    engineId,
+    setEngineId,
     setActiveId,
     newConversation,
     deleteConversation,
@@ -34,29 +36,33 @@ export default function App() {
 
   speakRef.current = speak;
 
-  const sendMessage = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || isThinking) return;
-    setInput("");
-    addMessage(trimmed, "user");
-    setIsThinking(true);
+  const sendMessage = useCallback(
+      async (text: string) => {
+        const trimmed = text.trim();
+        if (!trimmed || isThinking) return;
+        setInput("");
+        addMessage(trimmed, "user");
+        setIsThinking(true);
 
-    try {
-      const response = await askSeraphim(
-          trimmed,
-          activeId ?? undefined,       // ← session_id passé au backend
-          undefined,
-          (sentence) => speakRef.current?.(sentence)
-      );
-      addMessage(response, "assistant", "done");
-    } catch {
-      const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
-      addMessage(errMsg, "assistant", "error");
-      await speakRef.current?.(errMsg);
-    } finally {
-      setIsThinking(false);
-    }
-  }, [isThinking, addMessage, activeId]);   // ← activeId ajouté aux dépendances
+        try {
+          const response = await askSeraphim(
+              trimmed,
+              activeId ?? undefined, // session_id
+              undefined,
+              (sentence) => speakRef.current?.(sentence),
+              engineId, // <── moteur choisi
+          );
+          addMessage(response, "assistant", "done");
+        } catch {
+          const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
+          addMessage(errMsg, "assistant", "error");
+          await speakRef.current?.(errMsg);
+        } finally {
+          setIsThinking(false);
+        }
+      },
+      [isThinking, addMessage, activeId, engineId],
+  );
 
   async function handleSend() {
     await sendMessage(input);
@@ -78,6 +84,8 @@ export default function App() {
           onSelectConversation={setActiveId}
           onNewConversation={newConversation}
           onDeleteConversation={deleteConversation}
+          engineId={engineId}
+          onEngineChange={setEngineId}
       />
   );
 }
