@@ -47,12 +47,13 @@ export function useSpeech({
                               onTranscript,
                               onError,
                           }: UseSpeechOptions) {
-    const [state, setState] = useState<SpeechState>("idle");
-    const recogRef      = useRef<ISpeechRecognition | null>(null);
-    const audioCtxRef   = useRef<AudioContext | null>(null);
-    const sourceRef     = useRef<AudioBufferSourceNode | null>(null);
-    const queueRef      = useRef<string[]>([]);
-    const isPlayingRef  = useRef<boolean>(false);
+    const [state, setState]   = useState<SpeechState>("idle");
+    const recogRef            = useRef<ISpeechRecognition | null>(null);
+    const audioCtxRef         = useRef<AudioContext | null>(null);
+    const sourceRef           = useRef<AudioBufferSourceNode | null>(null);
+    const queueRef            = useRef<string[]>([]);
+    const isPlayingRef        = useRef<boolean>(false);
+    const abortRef            = useRef<AbortController | null>(null);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ export function useSpeech({
     }, []);
 
     const stopCurrentAudio = useCallback(() => {
+        abortRef.current?.abort();
+        abortRef.current = null;
         try { sourceRef.current?.stop(); } catch (_) {}
         sourceRef.current = null;
     }, []);
@@ -74,8 +77,7 @@ export function useSpeech({
     // ── STT ───────────────────────────────────────────────────────────────────
 
     const startListening = useCallback(() => {
-        // Vider la queue et stopper l'audio si Seraphim parle encore
-        queueRef.current = [];
+        queueRef.current     = [];
         isPlayingRef.current = false;
         stopCurrentAudio();
         setState("idle");
@@ -92,19 +94,16 @@ export function useSpeech({
         recog.maxAlternatives = 1;
         recog.continuous      = false;
 
-        recog.onstart = () => setState("listening");
-
+        recog.onstart  = () => setState("listening");
         recog.onresult = (e: ISpeechRecognitionEvent) => {
             const transcript = e.results[0][0].transcript.trim();
             if (transcript) onTranscript(transcript);
         };
-
-        recog.onerror = (e: ISpeechRecognitionErrorEvent) => {
+        recog.onerror  = (e: ISpeechRecognitionErrorEvent) => {
             onError?.(e.error);
             setState("idle");
         };
-
-        recog.onend = () => {
+        recog.onend    = () => {
             setState((s) => (s === "listening" ? "idle" : s));
         };
 
@@ -112,11 +111,7 @@ export function useSpeech({
         recog.start();
     }, [lang, onTranscript, onError, stopCurrentAudio]);
 
-    const stopListening = useCallback(() => {
-        recogRef.current?.stop();
-        setState("idle");
-    }, []);
-
+    const stopListening   = useCallback(() => { recogRef.current?.stop(); setState("idle"); }, []);
     const toggleListening = useCallback(() => {
         if (state === "listening") stopListening();
         else startListening();
@@ -130,17 +125,22 @@ export function useSpeech({
         setState("speaking");
 
         const sentence = queueRef.current.shift()!;
+        const abort    = new AbortController();
+        abortRef.current = abort;
 
         try {
             const response = await fetch(`${SERAPHIM_API}/tts/audio`, {
                 method:  "POST",
                 headers: { "Content-Type": "application/json" },
                 body:    JSON.stringify({ text: sentence }),
+                signal:  abort.signal,
             });
 
             if (!response.ok) throw new Error(`TTS error: ${response.status}`);
 
             const arrayBuffer = await response.arrayBuffer();
+            if (abort.signal.aborted) return;
+
             const audioCtx    = await getAudioCtx();
             const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
             const source      = audioCtx.createBufferSource();
@@ -149,24 +149,22 @@ export function useSpeech({
             source.connect(audioCtx.destination);
 
             source.onended = () => {
-                sourceRef.current  = null;
+                sourceRef.current    = null;
                 isPlayingRef.current = false;
-                if (queueRef.current.length > 0) {
-                    playNext();
-                } else {
-                    setState("idle");
-                }
+                abortRef.current     = null;
+                if (queueRef.current.length > 0) playNext();
+                else setState("idle");
             };
 
             source.start(0);
+
         } catch (err) {
+            if ((err as Error).name === "AbortError") return;
             sourceRef.current    = null;
             isPlayingRef.current = false;
-            if (queueRef.current.length > 0) {
-                playNext();
-            } else {
-                setState("idle");
-            }
+            abortRef.current     = null;
+            if (queueRef.current.length > 0) playNext();
+            else setState("idle");
             onError?.(`TTS indisponible : ${(err as Error).message}`);
         }
     }, [onError, getAudioCtx]);
@@ -187,13 +185,13 @@ export function useSpeech({
 
                 queueRef.current.push(clean);
                 playNext();
-                resolve(); // non-bloquant — la queue gère l'ordre
+                resolve();
             });
         },
         [playNext]
     );
 
-    // ── Stop speaking — vide la queue et arrête tout ──────────────────────────
+    // ── Stop speaking ─────────────────────────────────────────────────────────
 
     const stopSpeaking = useCallback(() => {
         queueRef.current     = [];

@@ -1,5 +1,8 @@
 """Seraphim CLI — entry point for all terminal commands."""
 
+import os
+os.environ["PYTHONUTF8"] = "1"
+
 import asyncio
 import uuid
 from typing import Optional
