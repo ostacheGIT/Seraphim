@@ -18,10 +18,8 @@ export default function App() {
     addMessage,
   } = useConversation();
 
-  // ── Ref stable vers speak pour éviter la dépendance circulaire ───────────
   const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
 
-  // ── Speech (STT + TTS) ───────────────────────────────────────────────────
   const {
     isListening,
     isSpeaking,
@@ -34,10 +32,8 @@ export default function App() {
     onError: (err) => console.error("Speech error:", err),
   });
 
-  // Garder speakRef à jour à chaque render
   speakRef.current = speak;
 
-  // ── Envoi d'un message (texte ou vocal) ──────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isThinking) return;
@@ -48,8 +44,8 @@ export default function App() {
     try {
       const response = await askSeraphim(
           trimmed,
+          activeId ?? undefined,       // ← session_id passé au backend
           undefined,
-          // 🔊 Joue chaque phrase dès qu'elle est générée par le LLM
           (sentence) => speakRef.current?.(sentence)
       );
       addMessage(response, "assistant", "done");
@@ -60,7 +56,7 @@ export default function App() {
     } finally {
       setIsThinking(false);
     }
-  }, [isThinking, addMessage]);
+  }, [isThinking, addMessage, activeId]);   // ← activeId ajouté aux dépendances
 
   async function handleSend() {
     await sendMessage(input);

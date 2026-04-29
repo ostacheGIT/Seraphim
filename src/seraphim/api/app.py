@@ -2,6 +2,10 @@
 Seraphim API — FastAPI application.
 """
 
+import uuid
+import asyncio
+from functools import partial
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -11,10 +15,8 @@ from seraphim import __version__
 from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.engine.ollama import engine
 from seraphim.settings import settings
-from seraphim.memory.store import init_db, load_history, list_sessions, delete_session
+from seraphim.memory.store import init_db, load_history, list_sessions, delete_session, save_message
 from seraphim.voice.speaker import synthesize_to_bytes, speak_async
-import asyncio
-from functools import partial
 
 app = FastAPI(
     title="Seraphim",
@@ -30,13 +32,20 @@ app.add_middleware(
 )
 
 
-# ─── Schemas ─────────────────────────────────────────────────────────────────
+# ─── Startup ─────────────────────────────────────────────────────────────────
 
+@app.on_event("startup")
+async def startup():
+    await init_db()
+
+
+# ─── Schemas ─────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     query: str
     agent: str = "chat"
     model: str | None = None
+    session_id: str | None = None
     messages: list[dict[str, str]] = []
     stream: bool = False
 
@@ -45,6 +54,7 @@ class ChatResponse(BaseModel):
     response: str
     agent: str
     model: str
+    session_id: str
 
 
 class TTSRequest(BaseModel):
@@ -53,14 +63,9 @@ class TTSRequest(BaseModel):
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
-
 @app.get("/")
 async def root():
-    return {
-        "name": "Seraphim",
-        "version": __version__,
-        "status": "running",
-    }
+    return {"name": "Seraphim", "version": __version__, "status": "running"}
 
 
 @app.get("/health")
@@ -102,13 +107,18 @@ async def chat(req: ChatRequest):
     if req.model:
         settings.engine.model = req.model
 
+    session_id = req.session_id or str(uuid.uuid4())
     ctx = AgentContext(messages=req.messages) if req.messages else None
     response = await ag.run(req.query, ctx)
+
+    await save_message(session_id, "user",      req.query, req.agent)
+    await save_message(session_id, "assistant", response,  req.agent)
 
     return ChatResponse(
         response=response,
         agent=req.agent,
         model=settings.engine.model,
+        session_id=session_id,
     )
 
 
@@ -119,44 +129,48 @@ async def chat_stream(req: ChatRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    session_id = req.session_id or str(uuid.uuid4())
     ctx = AgentContext(messages=req.messages) if req.messages else AgentContext()
 
-    # ── Toujours passer par ag.run() — accès complet à tous les skills ────────
     result = await ag.run(req.query, ctx)
+
+    # Sauvegarde en base
+    await save_message(session_id, "user",      req.query, req.agent)
+    await save_message(session_id, "assistant", result,    req.agent)
 
     async def generator():
         yield result
 
-    return StreamingResponse(generator(), media_type="text/plain")
+    from fastapi.responses import StreamingResponse as SR
+    response = SR(generator(), media_type="text/plain")
+    response.headers["X-Session-Id"] = session_id
+    return response
 
 
 # ─── Memory ──────────────────────────────────────────────────────────────────
 
-
 @app.get("/memory/sessions")
 async def get_sessions():
-    await init_db()
     sessions = await list_sessions()
     return [
         {
-            "session_id": s if isinstance(s, str) else s["session_id"],
-            "title": s.get("title", s["session_id"]) if isinstance(s, dict) else s,
-            "updated_at": s.get("updated_at", None) if isinstance(s, dict) else None,
+            "session_id": s["session"],
+            "title":      s["preview"] or s["session"],
+            "agent":      s["agent"],
+            "updated_at": s["timestamp"],
         }
         for s in sessions
     ]
 
 
 @app.get("/memory/sessions/{session_id}")
-async def get_session_history(session_id: str, limit: int = 20):
-    await init_db()
+async def get_session_history(session_id: str, limit: int = 50):
     messages = await load_history(session_id, limit=limit)
     return {"session": session_id, "messages": messages}
 
 
 @app.delete("/memory/sessions/{session_id}")
 async def remove_session(session_id: str):
-    await init_db()
     await delete_session(session_id)
     return {"deleted": session_id}
 
@@ -165,7 +179,6 @@ async def remove_session(session_id: str):
 
 @app.post("/tts/speak")
 async def tts_speak(req: TTSRequest):
-    """Joue la voix JARVIS directement sur la machine locale (non bloquant)."""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
     speak_async(req.text)
@@ -174,14 +187,10 @@ async def tts_speak(req: TTSRequest):
 
 @app.post("/tts/audio")
 async def tts_audio(req: TTSRequest):
-    """Retourne le WAV complet."""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
     loop = asyncio.get_event_loop()
-    audio_bytes = await loop.run_in_executor(
-        None,
-        partial(synthesize_to_bytes, req.text)
-    )
+    audio_bytes = await loop.run_in_executor(None, partial(synthesize_to_bytes, req.text))
     return StreamingResponse(
         iter([audio_bytes]),
         media_type="audio/wav",

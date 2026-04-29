@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Conversation, Message } from "../types";
 
-const API = "http://localhost:8000";
+const API = "http://localhost:7272";
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 9);
@@ -15,13 +15,20 @@ export function useConversation() {
     async function fetchSessions() {
       try {
         const res = await fetch(`${API}/memory/sessions`);
-        const raw = (await res.json()) as { session: string; preview: string; timestamp: string }[];
+        const raw = (await res.json()) as {
+          session_id: string;
+          title:      string;
+          agent:      string;
+          updated_at: string;
+        }[];
         const convos: Conversation[] = raw.map((s) => ({
-          id: s.session,
-          title: s.preview.slice(0, 42) + (s.preview.length > 42 ? "..." : ""),
-          messages: [],
-          createdAt: new Date(s.timestamp),
-          updatedAt: new Date(s.timestamp),
+          id:        s.session_id,
+          title:     s.title
+              ? s.title.slice(0, 42) + (s.title.length > 42 ? "..." : "")
+              : s.session_id,
+          messages:  [],
+          createdAt: new Date(s.updated_at),
+          updatedAt: new Date(s.updated_at),
         }));
         setConversations(convos);
         if (convos.length > 0) setActiveId(convos[0].id);
@@ -37,15 +44,15 @@ export function useConversation() {
     try {
       const res = await fetch(`${API}/memory/sessions/${id}`);
       const raw2 = (await res.json()) as {
-        session: string;
+        session:  string;
         messages: { role: string; content: string }[];
       };
       const messages: Message[] = raw2.messages.map((m): Message => ({
-        id: generateId(),
-        role: m.role as "user" | "assistant",
-        content: m.content,
+        id:        generateId(),
+        role:      m.role as "user" | "assistant",
+        content:   m.content,
         timestamp: new Date(),
-        status: "done",
+        status:    "done",
       }));
       setConversations((prev) =>
           prev.map((c) => (c.id === id ? { ...c, messages } : c))
@@ -64,11 +71,11 @@ export function useConversation() {
       title: "Nouvelle conversation",
       messages: [
         {
-          id: generateId(),
-          role: "assistant",
-          content: "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
+          id:        generateId(),
+          role:      "assistant",
+          content:   "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
           timestamp: new Date(),
-          status: "done",
+          status:    "done",
         },
       ],
       createdAt: new Date(),
@@ -97,7 +104,7 @@ export function useConversation() {
   const addMessage = useCallback(
       (content: string, role: "user" | "assistant", status?: Message["status"]) => {
         const msg: Message = {
-          id: generateId(),
+          id:        generateId(),
           role,
           content,
           timestamp: new Date(),

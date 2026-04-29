@@ -1,10 +1,12 @@
 const BASE = "http://localhost:7272";
 
 // Ponctuation qui marque une fin de phrase jouable
+
 const SENTENCE_END = /[.!?;:\n]/;
 
 export async function askSeraphim(
     message: string,
+    sessionId?: string,
     onToken?: (token: string) => void,
     onSentence?: (sentence: string) => void
 ): Promise<string> {
@@ -12,10 +14,11 @@ export async function askSeraphim(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      query: message,
-      agent: "chat",
-      model: "qwen2.5:3b",
-      messages: [],
+      query:      message,
+      agent:      "chat",
+      model:      "qwen2.5:3b",
+      session_id: sessionId ?? null,
+      messages:   [],
     }),
   });
 
@@ -29,7 +32,6 @@ export async function askSeraphim(
   while (true) {
     const { done, value } = await reader.read();
     if (done) {
-      // Jouer ce qui reste dans le buffer à la fin
       if (buffer.trim().length > 3) onSentence?.(buffer.trim());
       break;
     }
@@ -38,7 +40,6 @@ export async function askSeraphim(
     buffer += token;
     onToken?.(token);
 
-    // Dès qu'on détecte une fin de phrase, envoyer au TTS immédiatement
     if (SENTENCE_END.test(token)) {
       const sentence = buffer.trim();
       if (sentence.length > 3) onSentence?.(sentence);
