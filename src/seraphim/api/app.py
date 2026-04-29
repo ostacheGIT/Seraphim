@@ -12,7 +12,9 @@ from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.engine.ollama import engine
 from seraphim.settings import settings
 from seraphim.memory.store import init_db, load_history, list_sessions, delete_session
-from seraphim.voice.speaker import synthesize_to_bytes, speak_async
+from seraphim.voice.speaker import synthesize_to_bytes, synthesize_stream, speak_async
+import asyncio
+from functools import partial
 
 app = FastAPI(
     title="Seraphim",
@@ -172,12 +174,37 @@ async def tts_speak(req: TTSRequest):
 
 @app.post("/tts/audio")
 async def tts_audio(req: TTSRequest):
-    """Retourne le WAV brut — à jouer côté frontend Tauri/React."""
+    """Retourne le WAV complet — attend la fin de la synthèse."""
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
-    audio_bytes = synthesize_to_bytes(req.text)
+    loop = asyncio.get_event_loop()
+    audio_bytes = await loop.run_in_executor(
+        None,
+        partial(synthesize_to_bytes, req.text)
+    )
     return StreamingResponse(
         iter([audio_bytes]),
         media_type="audio/wav",
         headers={"Content-Disposition": "inline; filename=response.wav"},
+    )
+
+
+@app.post("/tts/stream")
+async def tts_stream(req: TTSRequest):
+    """Stream PCM brut chunk par chunk — latence réduite, audio démarre immédiatement."""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+
+    def generate():
+        for chunk in synthesize_stream(req.text):
+            yield chunk
+
+    return StreamingResponse(
+        generate(),
+        media_type="audio/pcm",
+        headers={
+            "X-Sample-Rate": str(24000),
+            "X-Channels": "1",
+            "X-Bit-Depth": "16",
+        },
     )

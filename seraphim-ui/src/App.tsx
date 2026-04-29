@@ -44,11 +44,15 @@ export default function App() {
     setInput("");
     addMessage(trimmed, "user");
     setIsThinking(true);
+
     try {
-      const response = await askSeraphim(trimmed);
+      const response = await askSeraphim(
+          trimmed,
+          undefined,
+          // 🔊 Joue chaque phrase dès qu'elle est générée par le LLM
+          (sentence) => speakRef.current?.(sentence)
+      );
       addMessage(response, "assistant", "done");
-      // 🔊 Seraphim répond à voix haute via Piper JARVIS
-      await speakRef.current?.(response);
     } catch {
       const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
       addMessage(errMsg, "assistant", "error");

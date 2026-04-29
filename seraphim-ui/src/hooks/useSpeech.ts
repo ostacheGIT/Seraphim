@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-// ─── Types Web Speech API (non inclus dans lib.dom par défaut) ───────────────
+// ─── Types Web Speech API ─────────────────────────────────────────────────────
 
 interface ISpeechRecognition extends EventTarget {
     lang: string;
@@ -28,11 +28,11 @@ function getSR(): ISpeechRecognitionConstructor | null {
     return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
 }
 
-// ─── Config backend ──────────────────────────────────────────────────────────
+// ─── Config backend ───────────────────────────────────────────────────────────
 
 const SERAPHIM_API = "http://localhost:7272";
 
-// ─── Hook principal ──────────────────────────────────────────────────────────
+// ─── Hook principal ───────────────────────────────────────────────────────────
 
 interface UseSpeechOptions {
     lang?: string;
@@ -48,20 +48,36 @@ export function useSpeech({
                               onError,
                           }: UseSpeechOptions) {
     const [state, setState] = useState<SpeechState>("idle");
-    const recogRef = useRef<ISpeechRecognition | null>(null);
-    const audioCtxRef = useRef<AudioContext | null>(null);
-    const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+    const recogRef      = useRef<ISpeechRecognition | null>(null);
+    const audioCtxRef   = useRef<AudioContext | null>(null);
+    const sourceRef     = useRef<AudioBufferSourceNode | null>(null);
+    const queueRef      = useRef<string[]>([]);
+    const isPlayingRef  = useRef<boolean>(false);
 
-    // ── Écoute (STT) ─────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    const getAudioCtx = useCallback(async (): Promise<AudioContext> => {
+        if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+            audioCtxRef.current = new AudioContext();
+        }
+        if (audioCtxRef.current.state === "suspended") {
+            await audioCtxRef.current.resume();
+        }
+        return audioCtxRef.current;
+    }, []);
+
+    const stopCurrentAudio = useCallback(() => {
+        try { sourceRef.current?.stop(); } catch (_) {}
+        sourceRef.current = null;
+    }, []);
+
+    // ── STT ───────────────────────────────────────────────────────────────────
 
     const startListening = useCallback(() => {
-        // Interrompre Piper si Seraphim parle encore
-        if (sourceRef.current) {
-            sourceRef.current.stop();
-            sourceRef.current = null;
-        }
-        audioCtxRef.current?.close();
-        audioCtxRef.current = null;
+        // Vider la queue et stopper l'audio si Seraphim parle encore
+        queueRef.current = [];
+        isPlayingRef.current = false;
+        stopCurrentAudio();
         setState("idle");
 
         const SR = getSR();
@@ -71,10 +87,10 @@ export function useSpeech({
         }
 
         const recog = new SR();
-        recog.lang = lang;
-        recog.interimResults = false;
+        recog.lang            = lang;
+        recog.interimResults  = false;
         recog.maxAlternatives = 1;
-        recog.continuous = false;
+        recog.continuous      = false;
 
         recog.onstart = () => setState("listening");
 
@@ -94,7 +110,7 @@ export function useSpeech({
 
         recogRef.current = recog;
         recog.start();
-    }, [lang, onTranscript, onError]);
+    }, [lang, onTranscript, onError, stopCurrentAudio]);
 
     const stopListening = useCallback(() => {
         recogRef.current?.stop();
@@ -106,102 +122,102 @@ export function useSpeech({
         else startListening();
     }, [state, startListening, stopListening]);
 
-    // ── Synthèse vocale via Piper JARVIS (AudioContext) ───────────────────────
+    // ── Queue audio ───────────────────────────────────────────────────────────
+
+    const playNext = useCallback(async () => {
+        if (isPlayingRef.current || queueRef.current.length === 0) return;
+        isPlayingRef.current = true;
+        setState("speaking");
+
+        const sentence = queueRef.current.shift()!;
+
+        try {
+            const response = await fetch(`${SERAPHIM_API}/tts/audio`, {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ text: sentence }),
+            });
+
+            if (!response.ok) throw new Error(`TTS error: ${response.status}`);
+
+            const arrayBuffer = await response.arrayBuffer();
+            const audioCtx    = await getAudioCtx();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            const source      = audioCtx.createBufferSource();
+            sourceRef.current = source;
+            source.buffer     = audioBuffer;
+            source.connect(audioCtx.destination);
+
+            source.onended = () => {
+                sourceRef.current  = null;
+                isPlayingRef.current = false;
+                if (queueRef.current.length > 0) {
+                    playNext();
+                } else {
+                    setState("idle");
+                }
+            };
+
+            source.start(0);
+        } catch (err) {
+            sourceRef.current    = null;
+            isPlayingRef.current = false;
+            if (queueRef.current.length > 0) {
+                playNext();
+            } else {
+                setState("idle");
+            }
+            onError?.(`TTS indisponible : ${(err as Error).message}`);
+        }
+    }, [onError, getAudioCtx]);
+
+    // ── TTS — speak() ajoute à la queue ──────────────────────────────────────
 
     const speak = useCallback(
         (text: string): Promise<void> => {
-            return new Promise(async (resolve) => {
-                // Annuler toute lecture en cours
-                if (sourceRef.current) {
-                    sourceRef.current.stop();
-                    sourceRef.current = null;
-                }
-                audioCtxRef.current?.close();
-                audioCtxRef.current = null;
-
+            return new Promise((resolve) => {
                 const clean = text
                     .replace(/\*\*(.+?)\*\*/g, "$1")
-                    .replace(/\*(.+?)\*/g, "$1")
-                    .replace(/`(.+?)`/g, "$1")
-                    .replace(/#{1,6}\s/g, "")
+                    .replace(/\*(.+?)\*/g,     "$1")
+                    .replace(/`(.+?)`/g,        "$1")
+                    .replace(/#{1,6}\s/g,       "")
                     .trim();
 
                 if (!clean) { resolve(); return; }
 
-                try {
-                    setState("speaking");
-
-                    const response = await fetch(`${SERAPHIM_API}/tts/audio`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ text: clean }),
-                    });
-
-                    if (!response.ok) throw new Error(`TTS error: ${response.status}`);
-
-                    const arrayBuffer = await response.arrayBuffer();
-
-                    // AudioContext contourne la politique autoplay de WebView2
-                    const audioCtx = new AudioContext();
-                    audioCtxRef.current = audioCtx;
-
-                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                    const source = audioCtx.createBufferSource();
-                    sourceRef.current = source;
-                    source.buffer = audioBuffer;
-                    source.connect(audioCtx.destination);
-
-                    source.onended = () => {
-                        audioCtx.close();
-                        audioCtxRef.current = null;
-                        sourceRef.current = null;
-                        setState("idle");
-                        resolve();
-                    };
-
-                    source.start(0);
-                } catch (err) {
-                    audioCtxRef.current?.close();
-                    audioCtxRef.current = null;
-                    sourceRef.current = null;
-                    setState("idle");
-                    onError?.(`TTS indisponible : ${(err as Error).message}`);
-                    resolve();
-                }
+                queueRef.current.push(clean);
+                playNext();
+                resolve(); // non-bloquant — la queue gère l'ordre
             });
         },
-        [onError]
+        [playNext]
     );
 
-    // ── Stop speaking ─────────────────────────────────────────────────────────
+    // ── Stop speaking — vide la queue et arrête tout ──────────────────────────
 
     const stopSpeaking = useCallback(() => {
-        if (sourceRef.current) {
-            sourceRef.current.stop();
-            sourceRef.current = null;
-        }
-        audioCtxRef.current?.close();
-        audioCtxRef.current = null;
+        queueRef.current     = [];
+        isPlayingRef.current = false;
+        stopCurrentAudio();
         setState("idle");
-    }, []);
+    }, [stopCurrentAudio]);
 
     // ── Nettoyage à l'unmount ─────────────────────────────────────────────────
 
     useEffect(() => {
         return () => {
             recogRef.current?.abort();
-            if (sourceRef.current) {
-                sourceRef.current.stop();
-                sourceRef.current = null;
-            }
+            queueRef.current     = [];
+            isPlayingRef.current = false;
+            stopCurrentAudio();
             audioCtxRef.current?.close();
         };
-    }, []);
+    }, [stopCurrentAudio]);
 
     return {
         state,
-        isListening: state === "listening",
-        isSpeaking:  state === "speaking",
+        isListening:     state === "listening",
+        isSpeaking:      state === "speaking",
         toggleListening,
         startListening,
         stopListening,

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Your personal AI, running entirely on your machine"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 
 keywords = ["ai", "assistant", "local", "ollama", "agents", "llm"]
@@ -33,13 +33,17 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "duckduckgo-search>=6.0.0",
     "beautifulsoup4>=4.12.0",
-    "chromadb>=0.5.0",          # mémoire vectorielle
-    "faster-whisper>=1.0.0",   # STT — garder
-    # "pyttsx3>=2.90",         # ❌ supprimer
-    "piper-tts>=1.2.0",        # ✅ remplacer par Piper
-    "huggingface-hub>=0.23.0", # ✅ pour dl le modèle JARVIS
-    "sounddevice>=0.5.0",      # ✅ lecture audio
-    "numpy>=1.26.0",           # ✅ requis par sounddevice
+    "chromadb>=0.5.0",
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.5.0",
+    "numpy>=1.26.0,<2.0",
+    "coqui-tts>=0.27.5",
+    "torch==2.4.0",
+    "torchaudio==2.4.0",
+    # ── Versions fixées pour compatibilité coqui-tts ──
+    #"transformers==4.40.0",
+    #"huggingface-hub==0.23.0",
+    #"tokenizers==0.19.1",
 ]
 
 [project.optional-dependencies]
@@ -57,9 +61,8 @@ memory = [
 ]
 voice = [
     "faster-whisper>=1.0.0",
-    "piper-tts>=1.2.0",
-    "huggingface-hub>=0.23.0",
     "sounddevice>=0.5.0",
+    "coqui-tts>=0.27.5",
 ]
 
 [project.scripts]
