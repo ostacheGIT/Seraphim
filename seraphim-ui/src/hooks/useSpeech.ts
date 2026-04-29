@@ -35,7 +35,7 @@ const SERAPHIM_API = "http://localhost:7272";
 // ─── Hook principal ──────────────────────────────────────────────────────────
 
 interface UseSpeechOptions {
-    lang?: string;          // langue STT (défaut : fr-FR)
+    lang?: string;
     onTranscript: (text: string) => void;
     onError?: (msg: string) => void;
 }
@@ -49,17 +49,20 @@ export function useSpeech({
                           }: UseSpeechOptions) {
     const [state, setState] = useState<SpeechState>("idle");
     const recogRef = useRef<ISpeechRecognition | null>(null);
-    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const sourceRef = useRef<AudioBufferSourceNode | null>(null);
 
-    // ── Écoute (STT — inchangé) ───────────────────────────────────────────────
+    // ── Écoute (STT) ─────────────────────────────────────────────────────────
 
     const startListening = useCallback(() => {
         // Interrompre Piper si Seraphim parle encore
-        if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current = null;
-            setState("idle");
+        if (sourceRef.current) {
+            sourceRef.current.stop();
+            sourceRef.current = null;
         }
+        audioCtxRef.current?.close();
+        audioCtxRef.current = null;
+        setState("idle");
 
         const SR = getSR();
         if (!SR) {
@@ -103,18 +106,19 @@ export function useSpeech({
         else startListening();
     }, [state, startListening, stopListening]);
 
-    // ── Synthèse vocale via Piper JARVIS ──────────────────────────────────────
+    // ── Synthèse vocale via Piper JARVIS (AudioContext) ───────────────────────
 
     const speak = useCallback(
         (text: string): Promise<void> => {
             return new Promise(async (resolve) => {
                 // Annuler toute lecture en cours
-                if (audioRef.current) {
-                    audioRef.current.pause();
-                    audioRef.current = null;
+                if (sourceRef.current) {
+                    sourceRef.current.stop();
+                    sourceRef.current = null;
                 }
+                audioCtxRef.current?.close();
+                audioCtxRef.current = null;
 
-                // Nettoyer le texte (retirer les balises markdown basiques)
                 const clean = text
                     .replace(/\*\*(.+?)\*\*/g, "$1")
                     .replace(/\*(.+?)\*/g, "$1")
@@ -133,32 +137,33 @@ export function useSpeech({
                         body: JSON.stringify({ text: clean }),
                     });
 
-                    if (!response.ok) {
-                        throw new Error(`TTS API error: ${response.status}`);
-                    }
+                    if (!response.ok) throw new Error(`TTS error: ${response.status}`);
 
-                    const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    const audio = new Audio(url);
-                    audioRef.current = audio;
+                    const arrayBuffer = await response.arrayBuffer();
 
-                    audio.onended = () => {
-                        URL.revokeObjectURL(url);
-                        audioRef.current = null;
+                    // AudioContext contourne la politique autoplay de WebView2
+                    const audioCtx = new AudioContext();
+                    audioCtxRef.current = audioCtx;
+
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    const source = audioCtx.createBufferSource();
+                    sourceRef.current = source;
+                    source.buffer = audioBuffer;
+                    source.connect(audioCtx.destination);
+
+                    source.onended = () => {
+                        audioCtx.close();
+                        audioCtxRef.current = null;
+                        sourceRef.current = null;
                         setState("idle");
                         resolve();
                     };
 
-                    audio.onerror = () => {
-                        URL.revokeObjectURL(url);
-                        audioRef.current = null;
-                        setState("idle");
-                        onError?.("Erreur de lecture audio Piper.");
-                        resolve();
-                    };
-
-                    audio.play();
+                    source.start(0);
                 } catch (err) {
+                    audioCtxRef.current?.close();
+                    audioCtxRef.current = null;
+                    sourceRef.current = null;
                     setState("idle");
                     onError?.(`TTS indisponible : ${(err as Error).message}`);
                     resolve();
@@ -168,23 +173,28 @@ export function useSpeech({
         [onError]
     );
 
-    // Arrêter la synthèse en cours
+    // ── Stop speaking ─────────────────────────────────────────────────────────
+
     const stopSpeaking = useCallback(() => {
-        if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current = null;
+        if (sourceRef.current) {
+            sourceRef.current.stop();
+            sourceRef.current = null;
         }
+        audioCtxRef.current?.close();
+        audioCtxRef.current = null;
         setState("idle");
     }, []);
 
-    // Nettoyage à l'unmount
+    // ── Nettoyage à l'unmount ─────────────────────────────────────────────────
+
     useEffect(() => {
         return () => {
             recogRef.current?.abort();
-            if (audioRef.current) {
-                audioRef.current.pause();
-                audioRef.current = null;
+            if (sourceRef.current) {
+                sourceRef.current.stop();
+                sourceRef.current = null;
             }
+            audioCtxRef.current?.close();
         };
     }, []);
 

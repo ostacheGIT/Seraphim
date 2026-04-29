@@ -1,11 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useConversation } from "./hooks/useConversation";
 import { useSpeech } from "./hooks/useSpeech";
 import { askSeraphim } from "./hooks/useSeraphimBackend";
 import OrbScreen from "./components/OrbScreen";
 
 export default function App() {
-  const [input, setInput]         = useState("");
+  const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
 
   const {
@@ -18,30 +18,8 @@ export default function App() {
     addMessage,
   } = useConversation();
 
-  // ── Envoi d'un message (texte ou vocal) ──────────────────────────────────
-  const sendMessage = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || isThinking) return;
-
-    setInput("");
-    addMessage(trimmed, "user");
-    setIsThinking(true);
-
-    try {
-      const response = await askSeraphim(trimmed);
-      addMessage(response, "assistant", "done");
-      // 🔊 Seraphim répond à voix haute
-      await speak(response);
-    } catch {
-      const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
-      addMessage(errMsg, "assistant", "error");
-      await speak(errMsg);
-    } finally {
-      setIsThinking(false);
-    }
-    // speak est stable (useCallback dans useSpeech), on l'ajoute après init
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isThinking, addMessage]);
+  // ── Ref stable vers speak pour éviter la dépendance circulaire ───────────
+  const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
 
   // ── Speech (STT + TTS) ───────────────────────────────────────────────────
   const {
@@ -52,11 +30,33 @@ export default function App() {
     stopSpeaking,
   } = useSpeech({
     lang: "fr-FR",
-    rate: 1,
-    pitch: 1,
     onTranscript: (transcript) => sendMessage(transcript),
     onError: (err) => console.error("Speech error:", err),
   });
+
+  // Garder speakRef à jour à chaque render
+  speakRef.current = speak;
+
+  // ── Envoi d'un message (texte ou vocal) ──────────────────────────────────
+  const sendMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isThinking) return;
+    setInput("");
+    addMessage(trimmed, "user");
+    setIsThinking(true);
+    try {
+      const response = await askSeraphim(trimmed);
+      addMessage(response, "assistant", "done");
+      // 🔊 Seraphim répond à voix haute via Piper JARVIS
+      await speakRef.current?.(response);
+    } catch {
+      const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
+      addMessage(errMsg, "assistant", "error");
+      await speakRef.current?.(errMsg);
+    } finally {
+      setIsThinking(false);
+    }
+  }, [isThinking, addMessage]);
 
   async function handleSend() {
     await sendMessage(input);
