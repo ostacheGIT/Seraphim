@@ -135,7 +135,8 @@ export default function OrbScreen({
                 </div>
             </aside>
 
-            {panelOpen && <div className="panel-backdrop" onClick={() => setPanelOpen(false)} />}
+            {/* backdrop désactivé pour ne pas fermer le panel en cliquant sur l'orbe */}
+            {/* {panelOpen && <div className="panel-backdrop" onClick={() => setPanelOpen(false)} />} */}
 
             {/* Orbe principal */}
             <div className={`orb-stage ${panelOpen ? "shifted" : ""}`}>
@@ -152,13 +153,25 @@ export default function OrbScreen({
                         </>
                     )}
 
-                    {/* Core — div pour éviter les styles natifs button qui cassent le border-radius */}
+                    {/* Core */}
                     <div
                         className={`orb-core orb-${orbState}`}
                         role="button"
                         tabIndex={0}
-                        onClick={onVoiceToggle}
-                        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onVoiceToggle()}
+                        onClick={() => {
+                            if (!activeId) {
+                                onNewConversation();
+                            }
+                            onVoiceToggle();
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                                if (!activeId) {
+                                    onNewConversation();
+                                }
+                                onVoiceToggle();
+                            }
+                        }}
                         aria-label={isListening ? "Arrêter l'écoute" : "Démarrer l'écoute"}
                     >
                         <div className="orb-inner-glow" />
@@ -169,7 +182,7 @@ export default function OrbScreen({
                 {/* Status */}
                 <div className="orb-status">{statusText}</div>
 
-                {/* Bouton couper la voix (visible uniquement quand Seraphim parle) */}
+                {/* Bouton couper la voix */}
                 {isSpeaking && (
                     <button className="mute-btn" onClick={onStopSpeaking} aria-label="Couper la voix">
                         <VolumeX size={14} />
