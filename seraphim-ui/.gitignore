@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Modèles TTS et voix (trop lourds pour GitHub)
+voices/
+*.onnx
+*.bin
+*.wav
+*.bak
