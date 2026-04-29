@@ -397,3 +397,40 @@ html, body, #root {
     background: var(--teal);
     box-shadow: 0 0 6px var(--teal);
 }
+
+/* ─── État speaking ─────────────────────────────────────────── */
+.orb-speaking {
+    border-color: rgba(180, 140, 255, 0.7);
+    box-shadow: 0 0 28px rgba(160, 100, 255, 0.45), 0 0 70px rgba(160, 100, 255, 0.12);
+    animation: orb-speak 1.8s ease-in-out infinite;
+}
+@keyframes orb-speak {
+    0%, 100% { box-shadow: 0 0 24px rgba(160,100,255,0.4), 0 0 60px rgba(160,100,255,0.1); }
+    50%       { box-shadow: 0 0 44px rgba(160,100,255,0.75), 0 0 90px rgba(160,100,255,0.22); }
+}
+
+.pulse-speaking {
+    border-color: rgba(180, 140, 255, 0.6) !important;
+}
+
+/* ─── Bouton mute ───────────────────────────────────────────── */
+.mute-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(180,140,255,0.35);
+    background: rgba(160,100,255,0.08);
+    color: rgba(200,170,255,0.8);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+    margin-top: -8px;
+}
+.mute-btn:hover {
+    background: rgba(160,100,255,0.18);
+    border-color: rgba(180,140,255,0.6);
+}
