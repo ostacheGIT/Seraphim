@@ -120,14 +120,14 @@ async def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     ctx = AgentContext(messages=req.messages) if req.messages else AgentContext()
-    ctx.add_system(ag.system_prompt)
-    ctx.add_user(req.query)
 
-    async def token_generator():
-        async for token in engine.stream_chat(ctx.messages, model=req.model):
-            yield token
+    # ── Toujours passer par ag.run() — accès complet à tous les skills ────────
+    result = await ag.run(req.query, ctx)
 
-    return StreamingResponse(token_generator(), media_type="text/plain")
+    async def generator():
+        yield result
+
+    return StreamingResponse(generator(), media_type="text/plain")
 
 
 # ─── Memory ──────────────────────────────────────────────────────────────────
