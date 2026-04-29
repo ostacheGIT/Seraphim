@@ -5,17 +5,17 @@ interface StatusBarProps {
 
 export default function StatusBar({ isListening, isThinking }: StatusBarProps) {
   const label = isThinking
-    ? "Traitement..."
-    : isListening
-    ? "Écoute..."
-    : "En attente";
+      ? "Traitement..."
+      : isListening
+          ? "Écoute..."
+          : "En attente";
 
   const state = isThinking ? "thinking" : isListening ? "live" : "";
 
   return (
-    <div className={`status-pill ${state}`}>
-      <span className="status-dot" />
-      {label}
-    </div>
+      <div className={`status-pill ${state}`}>
+        <span className="status-dot" />
+        {label}
+      </div>
   );
 }
