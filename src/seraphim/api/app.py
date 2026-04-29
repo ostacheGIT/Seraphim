@@ -12,6 +12,7 @@ from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.engine.ollama import engine
 from seraphim.settings import settings
 from seraphim.memory.store import init_db, load_history, list_sessions, delete_session
+from seraphim.voice.speaker import synthesize_to_bytes, speak_async
 
 app = FastAPI(
     title="Seraphim",
@@ -42,6 +43,10 @@ class ChatResponse(BaseModel):
     response: str
     agent: str
     model: str
+
+
+class TTSRequest(BaseModel):
+    text: str
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -122,30 +127,14 @@ async def chat_stream(req: ChatRequest):
 
     return StreamingResponse(token_generator(), media_type="text/plain")
 
-@app.get("/memory/sessions")
-async def get_sessions():
-    await init_db()
-    return await list_sessions()
 
-@app.get("/memory/sessions/{session_id}")
-async def get_session_history(session_id: str, limit: int = 20):
-    await init_db()
-    messages = await load_history(session_id, limit=limit)
-    return {"session": session_id, "messages": messages}
+# ─── Memory ──────────────────────────────────────────────────────────────────
 
-@app.delete("/memory/sessions/{session_id}")
-async def remove_session(session_id: str):
-    await init_db()
-    await delete_session(session_id)
-    return {"deleted": session_id}
 
-# Dans src/seraphim/api/app.py
 @app.get("/memory/sessions")
 async def get_sessions():
     await init_db()
     sessions = await list_sessions()
-    # Assure que chaque session a bien title + updated_at
-    # Si list_sessions() renvoie juste des strings, adapte comme suit :
     return [
         {
             "session_id": s if isinstance(s, str) else s["session_id"],
@@ -154,3 +143,41 @@ async def get_sessions():
         }
         for s in sessions
     ]
+
+
+@app.get("/memory/sessions/{session_id}")
+async def get_session_history(session_id: str, limit: int = 20):
+    await init_db()
+    messages = await load_history(session_id, limit=limit)
+    return {"session": session_id, "messages": messages}
+
+
+@app.delete("/memory/sessions/{session_id}")
+async def remove_session(session_id: str):
+    await init_db()
+    await delete_session(session_id)
+    return {"deleted": session_id}
+
+
+# ─── TTS / Voice ─────────────────────────────────────────────────────────────
+
+@app.post("/tts/speak")
+async def tts_speak(req: TTSRequest):
+    """Joue la voix JARVIS directement sur la machine locale (non bloquant)."""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    speak_async(req.text)
+    return {"status": "speaking", "text": req.text}
+
+
+@app.post("/tts/audio")
+async def tts_audio(req: TTSRequest):
+    """Retourne le WAV brut — à jouer côté frontend Tauri/React."""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    audio_bytes = synthesize_to_bytes(req.text)
+    return StreamingResponse(
+        iter([audio_bytes]),
+        media_type="audio/wav",
+        headers={"Content-Disposition": "inline; filename=response.wav"},
+    )

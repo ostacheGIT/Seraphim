@@ -28,14 +28,15 @@ function getSR(): ISpeechRecognitionConstructor | null {
     return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
 }
 
+// ─── Config backend ──────────────────────────────────────────────────────────
+
+const SERAPHIM_API = "http://localhost:7272";
+
 // ─── Hook principal ──────────────────────────────────────────────────────────
 
 interface UseSpeechOptions {
-    lang?: string;          // langue (défaut : fr-FR)
-    voiceName?: string;     // nom exact de la voix TTS souhaitée (optionnel)
-    rate?: number;          // vitesse TTS 0.5 – 2  (défaut : 1)
-    pitch?: number;         // tonalité TTS 0 – 2   (défaut : 1)
-    onTranscript: (text: string) => void;   // appelé quand l'utilisateur a parlé
+    lang?: string;          // langue STT (défaut : fr-FR)
+    onTranscript: (text: string) => void;
     onError?: (msg: string) => void;
 }
 
@@ -43,47 +44,22 @@ export type SpeechState = "idle" | "listening" | "speaking";
 
 export function useSpeech({
                               lang = "fr-FR",
-                              voiceName,
-                              rate = 1,
-                              pitch = 1,
                               onTranscript,
                               onError,
                           }: UseSpeechOptions) {
     const [state, setState] = useState<SpeechState>("idle");
     const recogRef = useRef<ISpeechRecognition | null>(null);
-    const synthRef = useRef<SpeechSynthesis | null>(null);
-    const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
 
-    // Charger la voix préférée dès que la liste est disponible
-    useEffect(() => {
-        if (typeof window === "undefined" || !window.speechSynthesis) return;
-        synthRef.current = window.speechSynthesis;
+    // ── Écoute (STT — inchangé) ───────────────────────────────────────────────
 
-        const pickVoice = () => {
-            const voices = synthRef.current!.getVoices();
-            if (!voices.length) return;
-
-            if (voiceName) {
-                voiceRef.current = voices.find((v) => v.name === voiceName) ?? null;
-            }
-            // Fallback : première voix française disponible
-            if (!voiceRef.current) {
-                voiceRef.current =
-                    voices.find((v) => v.lang.startsWith("fr") && v.localService) ??
-                    voices.find((v) => v.lang.startsWith("fr")) ??
-                    null;
-            }
-        };
-
-        pickVoice();
-        // Chrome charge les voix de façon asynchrone
-        synthRef.current.onvoiceschanged = pickVoice;
-    }, [voiceName]);
-
-    // ── Écoute ──────────────────────────────────────────────────────────────────
     const startListening = useCallback(() => {
-        // Interrompre la synthèse si Seraphim est encore en train de parler
-        synthRef.current?.cancel();
+        // Interrompre Piper si Seraphim parle encore
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
+            setState("idle");
+        }
 
         const SR = getSR();
         if (!SR) {
@@ -110,7 +86,6 @@ export function useSpeech({
         };
 
         recog.onend = () => {
-            // On repasse idle ici ; speak() le fera passer sur "speaking" si besoin
             setState((s) => (s === "listening" ? "idle" : s));
         };
 
@@ -128,17 +103,18 @@ export function useSpeech({
         else startListening();
     }, [state, startListening, stopListening]);
 
-    // ── Synthèse vocale ─────────────────────────────────────────────────────────
+    // ── Synthèse vocale via Piper JARVIS ──────────────────────────────────────
+
     const speak = useCallback(
         (text: string): Promise<void> => {
-            return new Promise((resolve) => {
-                const synth = synthRef.current;
-                if (!synth) { resolve(); return; }
+            return new Promise(async (resolve) => {
+                // Annuler toute lecture en cours
+                if (audioRef.current) {
+                    audioRef.current.pause();
+                    audioRef.current = null;
+                }
 
-                // Annuler toute parole en cours
-                synth.cancel();
-
-                // Nettoyer le texte (retirer les caractères markdown basiques)
+                // Nettoyer le texte (retirer les balises markdown basiques)
                 const clean = text
                     .replace(/\*\*(.+?)\*\*/g, "$1")
                     .replace(/\*(.+?)\*/g, "$1")
@@ -146,25 +122,58 @@ export function useSpeech({
                     .replace(/#{1,6}\s/g, "")
                     .trim();
 
-                const utter = new SpeechSynthesisUtterance(clean);
-                utter.lang = lang;
-                utter.rate = rate;
-                utter.pitch = pitch;
-                if (voiceRef.current) utter.voice = voiceRef.current;
+                if (!clean) { resolve(); return; }
 
-                utter.onstart = () => setState("speaking");
-                utter.onend = () => { setState("idle"); resolve(); };
-                utter.onerror = () => { setState("idle"); resolve(); };
+                try {
+                    setState("speaking");
 
-                synth.speak(utter);
+                    const response = await fetch(`${SERAPHIM_API}/tts/audio`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text: clean }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`TTS API error: ${response.status}`);
+                    }
+
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    audioRef.current = audio;
+
+                    audio.onended = () => {
+                        URL.revokeObjectURL(url);
+                        audioRef.current = null;
+                        setState("idle");
+                        resolve();
+                    };
+
+                    audio.onerror = () => {
+                        URL.revokeObjectURL(url);
+                        audioRef.current = null;
+                        setState("idle");
+                        onError?.("Erreur de lecture audio Piper.");
+                        resolve();
+                    };
+
+                    audio.play();
+                } catch (err) {
+                    setState("idle");
+                    onError?.(`TTS indisponible : ${(err as Error).message}`);
+                    resolve();
+                }
             });
         },
-        [lang, rate, pitch]
+        [onError]
     );
 
     // Arrêter la synthèse en cours
     const stopSpeaking = useCallback(() => {
-        synthRef.current?.cancel();
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
+        }
         setState("idle");
     }, []);
 
@@ -172,12 +181,15 @@ export function useSpeech({
     useEffect(() => {
         return () => {
             recogRef.current?.abort();
-            synthRef.current?.cancel();
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current = null;
+            }
         };
     }, []);
 
     return {
-        state,         // "idle" | "listening" | "speaking"
+        state,
         isListening: state === "listening",
         isSpeaking:  state === "speaking",
         toggleListening,

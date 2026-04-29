@@ -34,8 +34,12 @@ dependencies = [
     "duckduckgo-search>=6.0.0",
     "beautifulsoup4>=4.12.0",
     "chromadb>=0.5.0",          # mémoire vectorielle
-    "faster-whisper>=1.0.0",    # STT
-    "pyttsx3>=2.90",            # TTS
+    "faster-whisper>=1.0.0",   # STT — garder
+    # "pyttsx3>=2.90",         # ❌ supprimer
+    "piper-tts>=1.2.0",        # ✅ remplacer par Piper
+    "huggingface-hub>=0.23.0", # ✅ pour dl le modèle JARVIS
+    "sounddevice>=0.5.0",      # ✅ lecture audio
+    "numpy>=1.26.0",           # ✅ requis par sounddevice
 ]
 
 [project.optional-dependencies]
@@ -53,7 +57,9 @@ memory = [
 ]
 voice = [
     "faster-whisper>=1.0.0",
-    "pyttsx3>=2.90",
+    "piper-tts>=1.2.0",
+    "huggingface-hub>=0.23.0",
+    "sounddevice>=0.5.0",
 ]
 
 [project.scripts]
