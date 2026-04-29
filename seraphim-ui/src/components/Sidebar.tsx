@@ -13,6 +13,7 @@ function groupByDay(convos: Conversation[]) {
   const today = new Date().toDateString();
   const yesterday = new Date(Date.now() - 86400000).toDateString();
   const groups: Record<string, Conversation[]> = {};
+
   for (const c of convos) {
     const day = new Date(c.updatedAt).toDateString();
     const label =
@@ -34,22 +35,19 @@ export default function Sidebar({
 
   return (
       <aside className="sidebar">
-        {/* Brand */}
         <div className="brand">
-          <div className="brand-logo" />
+          <div className="brand-logo">S</div>
           <div>
-            <h1 className="brand-name">SERAPHIM</h1>
+            <h1 className="brand-name">Seraphim</h1>
             <p className="brand-sub">local · private · yours</p>
           </div>
         </div>
 
-        {/* New conversation */}
         <button className="new-chat-btn" onClick={onNew}>
-          <Plus size={14} />
-          <span>Nouvelle conversation</span>
+          <Plus size={16} />
+          <span>New conversation</span>
         </button>
 
-        {/* History */}
         <div className="conversation-scroll">
           {Object.entries(groups).map(([label, items]) => (
               <div key={label} className="conversation-group">
@@ -74,7 +72,7 @@ export default function Sidebar({
                             }}
                             aria-label="Supprimer"
                         >
-                          <Trash2 size={12} />
+                          <Trash2 size={13} />
                         </button>
                       </div>
                   ))}
@@ -83,10 +81,9 @@ export default function Sidebar({
           ))}
         </div>
 
-        {/* Footer */}
         <div className="sidebar-footer">
           <button className="ghost-icon" aria-label="Paramètres">
-            <Settings2 size={14} />
+            <Settings2 size={16} />
           </button>
           <span className="sidebar-version">v0.1.0</span>
         </div>

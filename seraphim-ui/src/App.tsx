@@ -1,13 +1,10 @@
 import { useState, useCallback } from "react";
-import TitleBar from "./components/TitleBar";
-import Sidebar from "./components/Sidebar";
-import ChatWindow from "./components/ChatWindow";
 import { useConversation } from "./hooks/useConversation";
 import { useVoice } from "./hooks/useVoice";
 import { askSeraphim } from "./hooks/useSeraphimBackend";
+import OrbScreen from "./components/OrbScreen";
 
 export default function App() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
 
@@ -52,29 +49,19 @@ export default function App() {
   }
 
   return (
-      <div className="app-root" data-theme={theme}>
-        <TitleBar
-            theme={theme}
-            onThemeToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-        />
-        <div className="app-layout">
-          <Sidebar
-              conversations={conversations}
-              activeId={activeId}
-              onSelect={setActiveId}
-              onNew={newConversation}
-              onDelete={deleteConversation}
-          />
-          <ChatWindow
-              conversation={active}
-              isListening={isListening}
-              isThinking={isThinking}
-              input={input}
-              onInputChange={setInput}
-              onSend={handleSend}
-              onVoiceToggle={toggleVoice}
-          />
-        </div>
-      </div>
+      <OrbScreen
+          conversation={active}
+          conversations={conversations}
+          activeId={activeId}
+          isListening={isListening}
+          isThinking={isThinking}
+          input={input}
+          onInputChange={setInput}
+          onSend={handleSend}
+          onVoiceToggle={toggleVoice}
+          onSelectConversation={setActiveId}
+          onNewConversation={newConversation}
+          onDeleteConversation={deleteConversation}
+      />
   );
 }
