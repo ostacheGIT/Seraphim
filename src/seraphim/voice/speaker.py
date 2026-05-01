@@ -64,7 +64,7 @@ def synthesize_to_bytes(text: str) -> bytes:
         with wave.open(tmp, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(sr)
+            wf.setframerate(sr * 1.7)
             voice.synthesize_wav(text, wf)
         with wave.open(tmp, "rb") as wf:
             frames = wf.readframes(wf.getnframes())

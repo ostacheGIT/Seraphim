@@ -7,20 +7,20 @@ interface SphereGLProps {
 }
 
 const STATE_CONFIG = {
-    idle:      { color: 0x64d8d0, speed: 0.003, size: 1.8,  opacity: 0.55, pulseAmp: 0.0  },
-    listening: { color: 0x64d8d0, speed: 0.018, size: 2.2,  opacity: 0.85, pulseAmp: 0.12 },
-    thinking:  { color: 0x64b4ff, speed: 0.006, size: 1.9,  opacity: 0.6,  pulseAmp: 0.04 },
-    speaking:  { color: 0xb464ff, speed: 0.014, size: 2.0,  opacity: 0.75, pulseAmp: 0.08 },
+    idle:      { color: 0xf5f5f5, speed: 0.003, size: 2.8, opacity: 0.55, pulseAmp: 0.0 },
+    listening: { color: 0xffffff, speed: 0.018, size: 2.9, opacity: 0.85, pulseAmp: 0.2 },
+    thinking:  { color: 0x64b4ff, speed: 0.006, size: 2.9, opacity: 0.6,  pulseAmp: 0.04 },
+    speaking:  { color: 0xb464ff, speed: 0.014, size: 3.0, opacity: 0.9,  pulseAmp: 0.2 },
 };
 
 export default function SphereGL({ state, onClick }: SphereGLProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const stateRef  = useRef(state);
+    const stateRef = useRef(state);
     stateRef.current = state;
 
     useEffect(() => {
         const canvas = canvasRef.current!;
-        const W = 260, H = 260;
+        const W = 360, H = 360;
 
         // ── Renderer ──────────────────────────────────────────────
         const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -29,24 +29,24 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
         renderer.setClearColor(0x000000, 0);
 
         // ── Scene / Camera ─────────────────────────────────────────
-        const scene  = new THREE.Scene();
+        const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 100);
-        camera.position.z = 3.5;
+        camera.position.z = 5.0;
 
         // ── Particules sur sphère ──────────────────────────────────
         const COUNT = 2400;
-        const positions   = new Float32Array(COUNT * 3);
-        const basePos     = new Float32Array(COUNT * 3);
-        const phases      = new Float32Array(COUNT);
+        const positions = new Float32Array(COUNT * 3);
+        const basePos = new Float32Array(COUNT * 3);
+        const phases = new Float32Array(COUNT);
 
         for (let i = 0; i < COUNT; i++) {
-            // distribution uniforme sur sphère (Fibonacci)
-            const phi   = Math.acos(1 - 2 * (i + 0.5) / COUNT);
+            const phi = Math.acos(1 - 2 * (i + 0.5) / COUNT);
             const theta = Math.PI * (1 + Math.sqrt(5)) * i;
             const x = Math.sin(phi) * Math.cos(theta);
             const y = Math.sin(phi) * Math.sin(theta);
             const z = Math.cos(phi);
-            basePos[i * 3]     = x;
+
+            basePos[i * 3] = x;
             basePos[i * 3 + 1] = y;
             basePos[i * 3 + 2] = z;
             phases[i] = Math.random() * Math.PI * 2;
@@ -56,35 +56,50 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
         geo.setAttribute("position", new THREE.BufferAttribute(positions.slice(), 3));
 
         const mat = new THREE.PointsMaterial({
-            color:       0x64d8d0,
-            size:        0.028,
+            color: 0xf5f5f5,
+            size: 0.028,
             transparent: true,
-            opacity:     0.55,
+            opacity: 0.55,
             sizeAttenuation: true,
-            depthWrite:  false,
+            depthWrite: false,
         });
 
         const mesh = new THREE.Points(geo, mat);
         scene.add(mesh);
 
         // ── Lignes de latitude légères ─────────────────────────────
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x64d8d0, transparent: true, opacity: 0.1 });
-        [-0.6, 0, 0.6].forEach(y => {
+        const lineMat = new THREE.LineBasicMaterial({
+            color: 0xf5f5f5,
+            transparent: true,
+            opacity: 0.1,
+        });
+
+        const lines: THREE.Line[] = [];
+        [-0.6, 0, 0.6].forEach((y) => {
             const r = Math.sqrt(1 - y * y);
             const pts = [];
-            for (let a = 0; a <= Math.PI * 2; a += 0.15) pts.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+            for (let a = 0; a <= Math.PI * 2; a += 0.15) {
+                pts.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+            }
             const lg = new THREE.BufferGeometry().setFromPoints(pts);
-            scene.add(new THREE.Line(lg, lineMat));
+            const line = new THREE.Line(lg, lineMat);
+            lines.push(line);
+            scene.add(line);
         });
 
         // ── Interaction souris ─────────────────────────────────────
         const mouse = new THREE.Vector2(9999, 9999);
+
         const onMove = (e: MouseEvent) => {
             const rect = canvas.getBoundingClientRect();
-            mouse.x =  ((e.clientX - rect.left) / W) * 2 - 1;
-            mouse.y = -((e.clientY - rect.top)  / H) * 2 + 1;
+            mouse.x = ((e.clientX - rect.left) / W) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / H) * 2 + 1;
         };
-        const onLeave = () => { mouse.set(9999, 9999); };
+
+        const onLeave = () => {
+            mouse.set(9999, 9999);
+        };
+
         canvas.addEventListener("mousemove", onMove);
         canvas.addEventListener("mouseleave", onLeave);
 
@@ -102,27 +117,32 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
             const target = new THREE.Color(cfg.color);
             mat.color.lerp(target, 0.05);
             mat.opacity += (cfg.opacity - mat.opacity) * 0.05;
+            lineMat.color.lerp(target, 0.05);
 
             // Rotation
             mesh.rotation.y += cfg.speed;
             mesh.rotation.x += cfg.speed * 0.3;
 
+            for (const line of lines) {
+                line.rotation.y += cfg.speed;
+                line.rotation.x += cfg.speed * 0.3;
+            }
+
             // Mise à jour positions avec pulse + interaction
             const posAttr = geo.attributes.position as THREE.BufferAttribute;
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(mouse, camera);
 
             for (let i = 0; i < COUNT; i++) {
                 const bx = basePos[i * 3];
                 const by = basePos[i * 3 + 1];
                 const bz = basePos[i * 3 + 2];
 
-                // Pulsation
                 const pulse = 1 + Math.sin(t * 2 + phases[i]) * cfg.pulseAmp;
-                const r = cfg.size / 2 * pulse;
+                const r = (cfg.size / 2) * pulse;
 
-                // Repulsion souris (en espace NDC approximatif)
-                const wx = bx * r, wy = by * r, wz = bz * r;
+                const wx = bx * r;
+                const wy = by * r;
+                const wz = bz * r;
+
                 const proj = new THREE.Vector3(wx, wy, wz).project(camera);
                 const dx = proj.x - mouse.x;
                 const dy = proj.y - mouse.y;
@@ -136,6 +156,7 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
                     wz + bz * repel
                 );
             }
+
             posAttr.needsUpdate = true;
 
             // Scale global
@@ -144,6 +165,7 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
 
             renderer.render(scene, camera);
         };
+
         animate();
 
         return () => {
@@ -153,6 +175,8 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
             renderer.dispose();
             geo.dispose();
             mat.dispose();
+            lineMat.dispose();
+            lines.forEach((line) => line.geometry.dispose());
         };
     }, []);
 
