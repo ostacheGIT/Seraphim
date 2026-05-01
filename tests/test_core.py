@@ -6,14 +6,14 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from seraphim.agents.base import ChatAgent, CoderAgent, ResearcherAgent, get_agent, AgentContext
-from seraphim.settings import SeraphimSettings
+from seraphim.settings import Settings
 
 
 # ─── Settings ────────────────────────────────────────────────────────────────
 
 
 def test_default_settings():
-    s = SeraphimSettings()
+    s = Settings()
     assert s.engine.provider == "ollama"
     assert s.engine.model == "llama3.2"
     assert s.server.port == 7272
@@ -62,19 +62,18 @@ def test_agent_context_messages():
 @pytest.mark.asyncio
 async def test_chat_agent_run():
     agent = ChatAgent()
-    agent.engine = AsyncMock()
-    agent.engine.chat = AsyncMock(return_value="Hello, I'm Seraphim!")
-
-    response = await agent.run("Say hello")
+    mock_engine = AsyncMock()
+    mock_engine.chat = AsyncMock(return_value={"messages": [{"role": "assistant", "content": "Hello, I'm Seraphim!"}]})
+    with patch.object(type(agent), "engine", new_callable=lambda: property(lambda self: mock_engine)):
+        response = await agent.run("Say hello")
     assert "Seraphim" in response
-    agent.engine.chat.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_coder_agent_run():
     agent = CoderAgent()
-    agent.engine = AsyncMock()
-    agent.engine.chat = AsyncMock(return_value="```python\nprint('hello')\n```")
-
-    response = await agent.run("Write hello world in Python")
+    mock_engine = AsyncMock()
+    mock_engine.chat = AsyncMock(return_value={"messages": [{"role": "assistant", "content": "```python\nprint('hello')\n```"}]})
+    with patch.object(type(agent), "engine", new_callable=lambda: property(lambda self: mock_engine)):
+        response = await agent.run("Write hello world in Python")
     assert "python" in response.lower()

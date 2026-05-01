@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from seraphim.memory._stubs import MemoryBackend
 from seraphim.memory.chunking import ChunkConfig, chunk_text
@@ -77,5 +80,5 @@ def ingest_directory(
                 ids = ingest_file(path, backend, config=config)
                 count += len(ids)
             except Exception:
-                pass
+                logger.warning("Failed to ingest %s", path, exc_info=True)
     return count

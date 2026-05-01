@@ -131,8 +131,10 @@ class SetVolumeSkill(BaseSkill):
                     from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
                     from ctypes import cast, POINTER
                     from comtypes import CLSCTX_ALL
-                    devices   = AudioUtilities.GetSpeakers()
-                    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                    speakers  = AudioUtilities.GetSpeakers()
+                    # newer pycaw wraps device in AudioDevice; use _dev for the raw IMMDevice
+                    dev       = getattr(speakers, '_dev', speakers)
+                    interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
                     volume    = cast(interface, POINTER(IAudioEndpointVolume))
                     volume.SetMasterVolumeLevelScalar(level / 100.0, None)
                     return SkillResult(success=True, output=f"🔊 Volume réglé à {level}%.")
@@ -140,7 +142,7 @@ class SetVolumeSkill(BaseSkill):
                     return SkillResult(success=False, output="pycaw non installé.", error="uv add pycaw")
 
         except Exception as e:
-            return SkillResult(success=False, output="Erreur volume.", error=str(e))
+            return SkillResult(success=False, output=f"Erreur volume : {e}", error=str(e))
 
 
 # ─── Contrôle système ─────────────────────────────────────────────────────────

@@ -1,9 +1,24 @@
+import re
 import subprocess
 import sys
 
 from seraphim.skills.base import BaseSkill, SkillResult
 
 _MAX_OUTPUT = 4000
+
+_DANGEROUS_PATTERNS = re.compile(
+    r"(?:os|subprocess)\s*\.\s*(?:system|popen|Popen|getoutput|call|run)\s*\("
+    r"|shutil\s*\.\s*rmtree\s*\("
+    r"|os\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\("
+    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil)['\"]"
+)
+
+
+def _check_dangerous(code: str) -> str | None:
+    m = _DANGEROUS_PATTERNS.search(code)
+    if m:
+        return f"Blocked: dangerous pattern detected near '{m.group()[:40]}'"
+    return None
 
 
 class CodeInterpreterSkill(BaseSkill):
@@ -29,9 +44,12 @@ class CodeInterpreterSkill(BaseSkill):
     }
 
     async def run(self, code: str, timeout: int = 15, **kwargs) -> SkillResult:
+        danger = _check_dangerous(code)
+        if danger:
+            return SkillResult(success=False, output="", error=danger)
         try:
             proc = subprocess.run(
-                [sys.executable, "-c", code],
+                [sys.executable, "-I", "-c", code],
                 capture_output=True,
                 text=True,
                 timeout=timeout,

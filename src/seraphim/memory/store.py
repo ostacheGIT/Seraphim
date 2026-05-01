@@ -1,6 +1,10 @@
+import logging
+
 import aiosqlite
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path.home() / ".seraphim" / "memory.db"
 
@@ -25,7 +29,7 @@ async def init_db() -> None:
         try:
             await db.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
         except Exception:
-            pass
+            logger.debug("Column 'title' already exists, skipping ALTER TABLE")
         await db.commit()
 
 

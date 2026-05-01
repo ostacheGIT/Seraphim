@@ -44,6 +44,15 @@ _CODE_RE = re.compile(
     re.I | re.VERBOSE,
     )
 
+_HTTP_RE = re.compile(
+    r"""(?:
+        (?:requête|request|fetch|curl|appel\s+api|http\s+request)\s+(?:GET|POST|PUT|DELETE|PATCH|sur\s+)?https?://|
+        (?:GET|POST|PUT|DELETE|PATCH)\s+https?://|
+        (?:fais|make|send)\s+(?:une\s+)?(?:requête|request)\s+(?:GET|POST|PUT|DELETE|PATCH)
+    )""",
+    re.I | re.VERBOSE,
+)
+
 _WEB_RE = re.compile(
     r"""(?:
         (?:cherche|recherche|search|trouve|find|googl|bing)\s+|
@@ -103,13 +112,15 @@ def route(query: str) -> RoutingDecision:
     if _SYSTEM_RE.search(q):
         return RoutingDecision(agent="react", skill=None, reason="system command detected")
 
-    # 2. Code / script Python
+    # 2. Code / script Python — "écris/génère" → coder; "exécute/run" → code_interpreter
     if _CODE_RE.search(q):
-        return RoutingDecision(
-            agent="skill:code_interpreter",
-            skill="code_interpreter",
-            reason="code/script request detected",
-        )
+        if re.search(r"(?:exécute|run|execute|lance)\s+(?:ce\s+)?(?:code|script)", q, re.I):
+            return RoutingDecision(
+                agent="skill:code_interpreter",
+                skill="code_interpreter",
+                reason="code execution request detected",
+            )
+        return RoutingDecision(agent="coder", skill=None, reason="code generation request detected")
 
     # 3. Fichiers locaux
     if _FILE_RE.search(q):
@@ -127,7 +138,11 @@ def route(query: str) -> RoutingDecision:
                 reason="pure math expression detected",
             )
 
-    # 5. Recherche web
+    # 5a. Requête HTTP explicite — avant web search (URL seule ≠ requête HTTP)
+    if _HTTP_RE.search(q):
+        return RoutingDecision(agent="react", skill=None, reason="HTTP request detected")
+
+    # 5b. Recherche web
     if _WEB_RE.search(q):
         return RoutingDecision(
             agent="skill:web_search",
@@ -139,11 +154,11 @@ def route(query: str) -> RoutingDecision:
     if _MEMORY_RE.search(q):
         return RoutingDecision(agent="chat", skill=None, reason="memory/recall intent")
 
-    # 7. Raisonnement complexe → think + chat
+    # 7. Raisonnement complexe → researcher (think est un outil LLM, pas un agent standalone)
     if _THINK_RE.search(q) or len(q.split()) > 30:
         return RoutingDecision(
-            agent="skill:think",
-            skill="think",
+            agent="researcher",
+            skill=None,
             reason="complex reasoning/analysis detected",
         )
 

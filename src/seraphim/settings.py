@@ -14,6 +14,8 @@ class ServerSettings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 7272
     reload: bool = False
+    api_key: str = ""
+    cors_origins: list[str] = ["*"]
 
 class MemorySettings(BaseModel):
     backend: str = "sqlite"

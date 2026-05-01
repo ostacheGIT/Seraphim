@@ -1,10 +1,25 @@
 import io
+import re
 import sys
 import traceback
 
 from seraphim.skills.base import BaseSkill, SkillResult
 
 _MAX_OUTPUT = 4000
+
+_DANGEROUS_PATTERNS = re.compile(
+    r"(?:os|subprocess)\s*\.\s*(?:system|popen|Popen|getoutput|call|run)\s*\("
+    r"|shutil\s*\.\s*rmtree\s*\("
+    r"|os\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\("
+    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil)['\"]"
+)
+
+
+def _check_dangerous(code: str) -> str | None:
+    m = _DANGEROUS_PATTERNS.search(code)
+    if m:
+        return f"Blocked: dangerous pattern detected near '{m.group()[:40]}'"
+    return None
 
 
 class ReplSkill(BaseSkill):
@@ -35,6 +50,10 @@ class ReplSkill(BaseSkill):
         self._namespace: dict = {}
 
     async def run(self, code: str, reset: bool = False, **kwargs) -> SkillResult:
+        danger = _check_dangerous(code)
+        if danger:
+            return SkillResult(success=False, output="", error=danger)
+
         if reset:
             self._namespace = {}
 

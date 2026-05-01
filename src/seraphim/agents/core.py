@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from seraphim.engine import get_engine
 from seraphim.engine.base import ChatMessage
@@ -78,7 +81,7 @@ class BaseAgent(ABC):
                     ),
                 )
         except Exception:
-            pass
+            logger.warning("RAG context injection failed", exc_info=True)
 
         ctx.add_user(query)
         return ctx

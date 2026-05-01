@@ -2,19 +2,22 @@
 Seraphim API — FastAPI application.
 """
 
+import logging
 import uuid
 import asyncio
 from functools import partial
 from typing import Optional, Literal
 
-from fastapi import FastAPI, HTTPException
+logger = logging.getLogger(__name__)
+
+from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 
 from seraphim import __version__
 from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
-from seraphim.agents.react import ReactAgent
 from seraphim.agents.router import route as auto_route
 from seraphim.engine import get_engine
 from seraphim.settings import settings
@@ -35,10 +38,20 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.server.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def _require_api_key(x_api_key: str | None = Security(_api_key_header)) -> None:
+    configured = settings.server.api_key
+    if not configured:
+        return
+    if x_api_key != configured:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
 
 # ─── Startup ─────────────────────────────────────────────────────────────────
 
@@ -94,6 +107,7 @@ async def health():
         )
         engine_status = "ok"
     except Exception:
+        logger.warning("Health check: engine unreachable", exc_info=True)
         engine_status = "unreachable"
 
     return {
@@ -144,6 +158,7 @@ async def list_installed_skills():
                 else:
                     description = ""
             except Exception:
+                logger.debug("Failed to parse skill manifest for %s", name, exc_info=True)
                 description = ""
             skills.append({
                 "id": f"skill:{name}",
@@ -177,21 +192,13 @@ def _resolve_agent_name(req: ChatRequest) -> str:
 
 def _build_agent(agent_name: str, engine_id: str):
     _ = get_engine(engine_id)
-    if agent_name == "react":
-        return ReactAgent(engine_id=engine_id)
-    if agent_name.startswith("skill:"):
-        from seraphim.agents.base import SkillAgent
-        skill_name = agent_name.split(":", 1)
-        ag = SkillAgent(skill_name)
-        ag.engine_id = engine_id
-        return ag
     ag = get_agent(agent_name)
     if hasattr(ag, "engine_id"):
         ag.engine_id = engine_id
     return ag
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
 async def chat(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
     routed_agent = _resolve_agent_name(req)
@@ -202,7 +209,13 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     session_id = req.session_id or str(uuid.uuid4())
-    ctx = AgentContext(messages=req.messages) if req.messages else None
+    if req.messages:
+        ctx = AgentContext(messages=req.messages)
+    elif req.session_id:
+        history = await load_history(req.session_id, limit=20)
+        ctx = AgentContext(messages=history)
+    else:
+        ctx = None
     response = await ag.run(req.query, ctx)
 
     await save_message(session_id, "user", req.query, routed_agent)
@@ -218,7 +231,7 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.post("/chat/stream")
+@app.post("/chat/stream", dependencies=[Depends(_require_api_key)])
 async def chat_stream(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
     routed_agent = _resolve_agent_name(req)
@@ -229,7 +242,13 @@ async def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     session_id = req.session_id or str(uuid.uuid4())
-    ctx = AgentContext(messages=req.messages) if req.messages else AgentContext()
+    if req.messages:
+        ctx = AgentContext(messages=req.messages)
+    elif req.session_id:
+        history = await load_history(req.session_id, limit=20)
+        ctx = AgentContext(messages=history)
+    else:
+        ctx = AgentContext()
 
     result = await ag.run(req.query, ctx)
 
@@ -277,7 +296,7 @@ async def remove_session(session_id: str):
 
 # ─── TTS / Voice ─────────────────────────────────────────────────────────────
 
-@app.post("/tts/speak")
+@app.post("/tts/speak", dependencies=[Depends(_require_api_key)])
 async def tts_speak(req: TTSRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
@@ -285,7 +304,7 @@ async def tts_speak(req: TTSRequest):
     return {"status": "speaking", "text": req.text}
 
 
-@app.post("/tts/audio")
+@app.post("/tts/audio", dependencies=[Depends(_require_api_key)])
 async def tts_audio(req: TTSRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
