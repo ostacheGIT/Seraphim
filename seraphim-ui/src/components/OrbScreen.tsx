@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Plus, Trash2, VolumeX } from "lucide-react";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
+import MessageBubble from "./MessageBubble";
+import SphereGL from "./SphereGL";
 
 interface OrbScreenProps {
     conversation: Conversation | null;
@@ -108,7 +110,7 @@ export default function OrbScreen({
                     </select>
                 </div>
 
-                {/* Skill — lecture seule, auto-sélectionné par le backend */}
+                {/* Skill — lecture seule */}
                 <div className="engine-block">
                     <div className="engine-header">
                         <span className="section-label">Agent / Skill</span>
@@ -170,12 +172,7 @@ export default function OrbScreen({
                 {/* Messages */}
                 <div className="chat-messages">
                     {conversation?.messages.map((msg) => (
-                        <div key={msg.id} className={`chat-msg ${msg.role}`}>
-                            <div className="msg-role">
-                                {msg.role === "user" ? "VOUS" : "SERAPHIM"}
-                            </div>
-                            <div className="msg-content">{msg.content}</div>
-                        </div>
+                        <MessageBubble key={msg.id} message={msg} />
                     ))}
                     {isThinking && (
                         <div className="chat-msg assistant">
@@ -203,44 +200,15 @@ export default function OrbScreen({
                 </div>
             </aside>
 
-            {/* Orbe principal */}
+            {/* Orbe principal — Three.js WebGL */}
             <div className={`orb-stage ${panelOpen ? "shifted" : ""}`}>
-                <div className="orb-wrapper">
-                    <div className="ring ring-1" />
-                    <div className="ring ring-2" />
-                    <div className="ring ring-3" />
-
-                    {(isListening || isThinking || isSpeaking) && (
-                        <>
-                            <div className={`pulse-ring pulse-ring-1 pulse-${orbState}`} />
-                            <div className={`pulse-ring pulse-ring-2 pulse-${orbState}`} />
-                        </>
-                    )}
-
-                    <div
-                        className={`orb-core orb-${orbState}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                            if (!activeId) onNewConversation();
-                            onVoiceToggle();
-                        }}
-                        onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                                if (!activeId) onNewConversation();
-                                onVoiceToggle();
-                            }
-                        }}
-                        aria-label={isListening ? "Arrêter l'écoute" : "Démarrer l'écoute"}
-                    >
-                        <div className="orb-inner-glow" />
-                        <span className="orb-label">
-                            S.E.R.A
-                            <br />
-                            P.H.I.M
-                        </span>
-                    </div>
-                </div>
+                <SphereGL
+                    state={orbState}
+                    onClick={() => {
+                        if (!activeId) onNewConversation();
+                        onVoiceToggle();
+                    }}
+                />
 
                 <div className="orb-status">{statusText}</div>
 
@@ -256,10 +224,10 @@ export default function OrbScreen({
                 )}
 
                 <div className="dot-row">
-                    <span className={`dot ${orbState === "idle" ? "active" : ""}`} />
+                    <span className={`dot ${orbState === "idle"      ? "active" : ""}`} />
                     <span className={`dot ${orbState === "listening" ? "active" : ""}`} />
-                    <span className={`dot ${orbState === "thinking" ? "active" : ""}`} />
-                    <span className={`dot ${orbState === "speaking" ? "active" : ""}`} />
+                    <span className={`dot ${orbState === "thinking"  ? "active" : ""}`} />
+                    <span className={`dot ${orbState === "speaking"  ? "active" : ""}`} />
                 </div>
             </div>
         </div>
