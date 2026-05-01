@@ -274,6 +274,10 @@ def show_version():
 from seraphim.voice.cli_voice import listen_command
 app.command("listen")(listen_command)
 
+# ── Gestion des skills externes ───────────────────────────────────────────────
+from seraphim.skills.skill_cmd import app as skill_app
+app.add_typer(skill_app, name="skill")
+
 
 if __name__ == "__main__":
     app()

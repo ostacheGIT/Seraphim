@@ -171,16 +171,45 @@ class ReActAgent(BaseAgent):
 
         return "I was unable to complete the task within the allowed steps."
 
+class SkillAgent(BaseAgent):
+    name = "skill"
+    description = "Exécute un skill Hermes installé"
+
+    def __init__(self, skill_name: str):
+        super().__init__()
+        self.skill_name = skill_name
+        self.system_prompt = self._load_skill_prompt()
+
+    def _load_skill_prompt(self) -> str:
+        from pathlib import Path
+        skills_root = Path("~/.seraphim/skills").expanduser()
+        for skill_md in skills_root.rglob(f"{self.skill_name}/SKILL.md"):
+            return skill_md.read_text(encoding="utf-8")
+        raise FileNotFoundError(
+            f"Skill '{self.skill_name}' non trouvé. "
+            f"Installez-le : seraphim skill import {self.skill_name}"
+        )
+
+    async def run(self, query: str, context: AgentContext = None) -> str:
+        ctx = self.build_context(query, context)
+        result = await self.engine.chat(ctx.messages)
+        msgs = result.get("messages", [])
+        response = msgs[-1].get("content", "") if msgs else ""
+        ctx.add_assistant(response)
+        return response
 
 AGENT_REGISTRY: dict[str, type[BaseAgent]] = {
     "chat":       ChatAgent,
     "coder":      CoderAgent,
     "researcher": ResearcherAgent,
     "react":      ReActAgent,
+    "skill":      SkillAgent,
 }
 
-
 def get_agent(name: str) -> BaseAgent:
+    if name.startswith("skill:"):
+        skill_name = name.split(":", 1)[1]
+        return SkillAgent(skill_name)
     cls = AGENT_REGISTRY.get(name)
     if cls is None:
         available = ", ".join(AGENT_REGISTRY.keys())

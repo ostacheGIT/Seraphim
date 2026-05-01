@@ -120,6 +120,36 @@ async def list_agents():
         ]
     }
 
+@app.get("/skills")
+async def list_installed_skills():
+    from pathlib import Path
+    skills_root = Path("~/.seraphim/skills").expanduser()
+    skills = []
+    if skills_root.exists():
+        for skill_md in sorted(skills_root.rglob("SKILL.md")):
+            name = skill_md.parent.name
+            source = skill_md.parent.parent.name
+            # Lire la description depuis le frontmatter
+            try:
+                import yaml
+                raw = skill_md.read_text(encoding="utf-8")
+                if raw.startswith("---"):
+                    rest = raw[3:].lstrip("\n")
+                    end = rest.find("\n---")
+                    fm = yaml.safe_load(rest[:end]) if end != -1 else {}
+                    description = fm.get("description", "") if isinstance(fm, dict) else ""
+                else:
+                    description = ""
+            except Exception:
+                description = ""
+            skills.append({
+                "id": f"skill:{name}",
+                "name": name,
+                "source": source,
+                "description": description,
+            })
+    return {"skills": skills}
+
 
 def _resolve_engine_id(req: ChatRequest) -> str:
     engine_id: str | None = req.engine_id
@@ -132,15 +162,18 @@ def _resolve_engine_id(req: ChatRequest) -> str:
 
 
 def _build_agent(agent_name: str, engine_id: str):
-    # vérifie que l'engine existe
     _ = get_engine(engine_id)
-
     if agent_name == "react":
         return ReactAgent(engine_id=engine_id)
-
+    if agent_name.startswith("skill:"):
+        from seraphim.agents.base import SkillAgent
+        skill_name = agent_name.split(":", 1)[1]
+        ag = SkillAgent(skill_name)
+        ag.engine_id = engine_id
+        return ag
     ag = get_agent(agent_name)
     if hasattr(ag, "engine_id"):
-        ag.engine_id = engine_id  # type: ignore[assignment]
+        ag.engine_id = engine_id
     return ag
 
 

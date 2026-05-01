@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Plus, Trash2, VolumeX } from "lucide-react";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
+import { fetchInstalledSkills, InstalledSkill } from "../hooks/useSeraphimBackend";
 
 interface OrbScreenProps {
     conversation: Conversation | null;
@@ -20,6 +21,8 @@ interface OrbScreenProps {
     onDeleteConversation: (id: string) => void;
     engineId: EngineId;
     onEngineChange: (id: EngineId) => void;
+    selectedSkill: string;
+    onSkillChange: (skill: string) => void;
 }
 
 export default function OrbScreen({
@@ -39,19 +42,25 @@ export default function OrbScreen({
                                       onDeleteConversation,
                                       engineId,
                                       onEngineChange,
+                                      selectedSkill,
+                                      onSkillChange,
                                   }: OrbScreenProps) {
     const [panelOpen, setPanelOpen] = useState(false);
+    const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
     const chatBottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [conversation?.messages]);
 
+    useEffect(() => {
+        fetchInstalledSkills().then(setInstalledSkills);
+    }, []);
+
     const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "Enter") onSend();
     };
 
-    // État de l'orbe : listening > speaking > thinking > idle
     const orbState = isListening
         ? "listening"
         : isSpeaking
@@ -67,6 +76,10 @@ export default function OrbScreen({
             : isThinking
                 ? "◌ traitement..."
                 : "cliquez pour parler";
+
+    const skillLabel = selectedSkill.startsWith("skill:")
+        ? `🧠 ${selectedSkill.split(":")[1]}`
+        : selectedSkill;
 
     return (
         <div className="orb-root">
@@ -94,6 +107,7 @@ export default function OrbScreen({
                     </button>
                 </div>
 
+                {/* Moteur */}
                 <div className="engine-block">
                     <div className="engine-header">
                         <span className="section-label">Moteur</span>
@@ -107,6 +121,46 @@ export default function OrbScreen({
                         <option value="ollama_qwen7b">Qwen 2.5 7B (précis)</option>
                     </select>
                 </div>
+
+                {/* Skills */}
+                <div className="engine-block">
+                    <div className="engine-header">
+                        <span className="section-label">Agent / Skill</span>
+                    </div>
+                    <select
+                        className="engine-select"
+                        value={selectedSkill}
+                        onChange={(e) => onSkillChange(e.target.value)}
+                    >
+                        <optgroup label="Agents">
+                            <option value="chat">💬 Chat</option>
+                            <option value="react">⚙️ ReAct</option>
+                            <option value="coder">👨‍💻 Coder</option>
+                            <option value="researcher">🔬 Researcher</option>
+                        </optgroup>
+                        {installedSkills.length > 0 && (
+                            <optgroup label="Skills Hermes">
+                                {installedSkills.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                        🧠 {s.name}
+                                    </option>
+                                ))}
+                            </optgroup>
+                        )}
+                    </select>
+                </div>
+
+                {/* Indicateur skill actif */}
+                {selectedSkill.startsWith("skill:") && (
+                    <div style={{
+                        padding: "6px 12px",
+                        fontSize: "11px",
+                        color: "var(--accent, #a78bfa)",
+                        borderBottom: "1px solid rgba(255,255,255,0.06)",
+                    }}>
+                        {skillLabel} actif
+                    </div>
+                )}
 
                 <div className="conversation-list">
                     {conversations.length === 0 && (
@@ -180,7 +234,6 @@ export default function OrbScreen({
                     <div className="ring ring-2" />
                     <div className="ring ring-3" />
 
-                    {/* Anneaux pulsants quand actif */}
                     {(isListening || isThinking || isSpeaking) && (
                         <>
                             <div className={`pulse-ring pulse-ring-1 pulse-${orbState}`} />
@@ -188,42 +241,44 @@ export default function OrbScreen({
                         </>
                     )}
 
-                    {/* Core */}
                     <div
                         className={`orb-core orb-${orbState}`}
                         role="button"
                         tabIndex={0}
                         onClick={() => {
-                            if (!activeId) {
-                                onNewConversation();
-                            }
+                            if (!activeId) onNewConversation();
                             onVoiceToggle();
                         }}
                         onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
-                                if (!activeId) {
-                                    onNewConversation();
-                                }
+                                if (!activeId) onNewConversation();
                                 onVoiceToggle();
                             }
                         }}
-                        aria-label={
-                            isListening ? "Arrêter l'écoute" : "Démarrer l'écoute"
-                        }
+                        aria-label={isListening ? "Arrêter l'écoute" : "Démarrer l'écoute"}
                     >
                         <div className="orb-inner-glow" />
                         <span className="orb-label">
-              S.E.R.A
-              <br />
-              P.H.I.M
-            </span>
+                            S.E.R.A
+                            <br />
+                            P.H.I.M
+                        </span>
                     </div>
                 </div>
 
-                {/* Status */}
+                {/* Status + skill actif sous l'orbe */}
                 <div className="orb-status">{statusText}</div>
+                {selectedSkill.startsWith("skill:") && (
+                    <div style={{
+                        fontSize: "11px",
+                        color: "var(--accent, #a78bfa)",
+                        opacity: 0.8,
+                        marginTop: "4px",
+                    }}>
+                        {skillLabel}
+                    </div>
+                )}
 
-                {/* Bouton couper la voix */}
                 {isSpeaking && (
                     <button
                         className="mute-btn"
@@ -235,24 +290,11 @@ export default function OrbScreen({
                     </button>
                 )}
 
-                {/* Dots */}
                 <div className="dot-row">
                     <span className={`dot ${orbState === "idle" ? "active" : ""}`} />
-                    <span
-                        className={`dot ${
-                            orbState === "listening" ? "active" : ""
-                        }`}
-                    />
-                    <span
-                        className={`dot ${
-                            orbState === "thinking" ? "active" : ""
-                        }`}
-                    />
-                    <span
-                        className={`dot ${
-                            orbState === "speaking" ? "active" : ""
-                        }`}
-                    />
+                    <span className={`dot ${orbState === "listening" ? "active" : ""}`} />
+                    <span className={`dot ${orbState === "thinking" ? "active" : ""}`} />
+                    <span className={`dot ${orbState === "speaking" ? "active" : ""}`} />
                 </div>
             </div>
         </div>

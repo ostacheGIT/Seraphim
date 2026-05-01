@@ -12,14 +12,13 @@ class SkillResult:
 class BaseSkill(ABC):
     name: str
     description: str
-    parameters: dict  # JSON Schema pour les paramètres
+    parameters: dict
 
     @abstractmethod
     async def run(self, **kwargs) -> SkillResult:
         ...
 
     def to_tool(self) -> dict:
-        """Format Ollama/OpenAI tool calling"""
         return {
             "type": "function",
             "function": {
