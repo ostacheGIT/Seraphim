@@ -278,6 +278,10 @@ app.command("listen")(listen_command)
 from seraphim.skills.skill_cmd import app as skill_app
 app.add_typer(skill_app, name="skill")
 
+# ── Gestion de la base de connaissances RAG ────────────────────────────────────
+from seraphim.memory.memory_cmd import app as memory_app
+app.add_typer(memory_app, name="memory")
+
 
 if __name__ == "__main__":
     app()

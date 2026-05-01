@@ -45,17 +45,40 @@ class BaseAgent(ABC):
         """
         return get_engine(self.engine_id)
 
+    async def _chat(self, messages) -> str:
+        """Call engine.chat() and extract the response string."""
+        result = await self.engine.chat(messages)
+        msgs = result.get("messages", [])
+        return msgs[-1].get("content", "") if msgs else ""
+
     @abstractmethod
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         ...
 
     def build_context(self, query: str, context: AgentContext | None = None) -> AgentContext:
-        """
-        Construit un AgentContext en ajoutant le system prompt s'il n'existe pas,
-        puis le message utilisateur.
-        """
         ctx = context or AgentContext()
         if not any(m.get("role") == "system" for m in ctx.messages):
             ctx.add_system(self.system_prompt)
+
+        # RAG context injection — only if a backend is active
+        try:
+            from seraphim.memory import get_rag_backend, inject_context, ContextConfig
+            from seraphim.settings import settings
+            rag = get_rag_backend()
+            if rag is not None:
+                cfg = settings.memory
+                ctx.messages = inject_context(
+                    query,
+                    ctx.messages,
+                    rag,
+                    config=ContextConfig(
+                        top_k=cfg.context_top_k,
+                        min_score=cfg.context_min_score,
+                        max_context_tokens=cfg.context_max_tokens,
+                    ),
+                )
+        except Exception:
+            pass
+
         ctx.add_user(query)
         return ctx

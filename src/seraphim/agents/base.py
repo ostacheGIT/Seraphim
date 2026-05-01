@@ -55,7 +55,7 @@ class ChatAgent(BaseAgent):
 
         # Conversation normale
         ctx = self.build_context(query, context)
-        response = await self.engine.chat(ctx.messages)
+        response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
         return response
 
@@ -70,7 +70,7 @@ class CoderAgent(BaseAgent):
 
     async def run(self, query: str, context: AgentContext = None) -> str:
         ctx = self.build_context(query, context)
-        response = await self.engine.chat(ctx.messages)
+        response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
         return response
 
@@ -85,7 +85,7 @@ class ResearcherAgent(BaseAgent):
 
     async def run(self, query: str, context: AgentContext = None) -> str:
         ctx = self.build_context(query, context)
-        response = await self.engine.chat(ctx.messages)
+        response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
         return response
 
@@ -131,7 +131,7 @@ class ReActAgent(BaseAgent):
         ctx = self.build_context(query, context)
 
         for _ in range(8):
-            response = await self.engine.chat(ctx.messages)
+            response = await self._chat(ctx.messages)
 
             action_match = re.search(r"ACTION:\s*(\w+)", response)
             args_match   = re.search(r"ARGS:\s*(\{.*?\})", response, re.DOTALL)

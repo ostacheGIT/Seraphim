@@ -18,6 +18,11 @@ class ServerSettings(BaseModel):
 class MemorySettings(BaseModel):
     backend: str = "sqlite"
     path: str = "~/.seraphim/memory.db"
+    rag_backend: str = "sqlite_fts"   # sqlite_fts | faiss | bm25 | hybrid
+    rag_enabled: bool = False
+    context_top_k: int = 5
+    context_min_score: float = 0.0
+    context_max_tokens: int = 2048
 
 class AgentsSettings(BaseModel):
     default: str = "chat"

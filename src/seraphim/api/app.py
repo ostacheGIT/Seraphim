@@ -45,6 +45,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_db()
+    from seraphim.memory import init_rag
+    init_rag()
 
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
