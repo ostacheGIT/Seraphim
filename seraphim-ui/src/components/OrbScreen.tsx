@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Plus, Trash2, VolumeX } from "lucide-react";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
-import { fetchInstalledSkills, InstalledSkill } from "../hooks/useSeraphimBackend";
 
 interface OrbScreenProps {
     conversation: Conversation | null;
@@ -21,8 +20,6 @@ interface OrbScreenProps {
     onDeleteConversation: (id: string) => void;
     engineId: EngineId;
     onEngineChange: (id: EngineId) => void;
-    selectedSkill: string;
-    onSkillChange: (skill: string) => void;
 }
 
 export default function OrbScreen({
@@ -42,20 +39,13 @@ export default function OrbScreen({
                                       onDeleteConversation,
                                       engineId,
                                       onEngineChange,
-                                      selectedSkill,
-                                      onSkillChange,
                                   }: OrbScreenProps) {
     const [panelOpen, setPanelOpen] = useState(false);
-    const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
     const chatBottomRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [conversation?.messages]);
-
-    useEffect(() => {
-        fetchInstalledSkills().then(setInstalledSkills);
-    }, []);
 
     const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "Enter") onSend();
@@ -76,10 +66,6 @@ export default function OrbScreen({
             : isThinking
                 ? "◌ traitement..."
                 : "cliquez pour parler";
-
-    const skillLabel = selectedSkill.startsWith("skill:")
-        ? `🧠 ${selectedSkill.split(":")[1]}`
-        : selectedSkill;
 
     return (
         <div className="orb-root">
@@ -122,46 +108,36 @@ export default function OrbScreen({
                     </select>
                 </div>
 
-                {/* Skills */}
+                {/* Skill — lecture seule, auto-sélectionné par le backend */}
                 <div className="engine-block">
                     <div className="engine-header">
                         <span className="section-label">Agent / Skill</span>
                     </div>
-                    <select
-                        className="engine-select"
-                        value={selectedSkill}
-                        onChange={(e) => onSkillChange(e.target.value)}
-                    >
-                        <optgroup label="Agents">
-                            <option value="chat">💬 Chat</option>
-                            <option value="react">⚙️ ReAct</option>
-                            <option value="coder">👨‍💻 Coder</option>
-                            <option value="researcher">🔬 Researcher</option>
-                        </optgroup>
-                        {installedSkills.length > 0 && (
-                            <optgroup label="Skills Hermes">
-                                {installedSkills.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                        🧠 {s.name}
-                                    </option>
-                                ))}
-                            </optgroup>
-                        )}
-                    </select>
+                    <div style={{
+                        padding: "6px 10px",
+                        borderRadius: "6px",
+                        background: "rgba(167,139,250,0.08)",
+                        border: "1px solid rgba(167,139,250,0.2)",
+                        fontSize: "12px",
+                        color: "var(--accent, #a78bfa)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                    }}>
+                        <span style={{ opacity: 0.6, fontSize: "10px" }}>⚡</span>
+                        Sélection automatique
+                        <span style={{
+                            marginLeft: "auto",
+                            fontSize: "10px",
+                            opacity: 0.5,
+                            fontStyle: "italic",
+                        }}>
+                            auto
+                        </span>
+                    </div>
                 </div>
 
-                {/* Indicateur skill actif */}
-                {selectedSkill.startsWith("skill:") && (
-                    <div style={{
-                        padding: "6px 12px",
-                        fontSize: "11px",
-                        color: "var(--accent, #a78bfa)",
-                        borderBottom: "1px solid rgba(255,255,255,0.06)",
-                    }}>
-                        {skillLabel} actif
-                    </div>
-                )}
-
+                {/* Liste conversations */}
                 <div className="conversation-list">
                     {conversations.length === 0 && (
                         <p className="empty-hint">Aucune conversation</p>
@@ -266,18 +242,7 @@ export default function OrbScreen({
                     </div>
                 </div>
 
-                {/* Status + skill actif sous l'orbe */}
                 <div className="orb-status">{statusText}</div>
-                {selectedSkill.startsWith("skill:") && (
-                    <div style={{
-                        fontSize: "11px",
-                        color: "var(--accent, #a78bfa)",
-                        opacity: 0.8,
-                        marginTop: "4px",
-                    }}>
-                        {skillLabel}
-                    </div>
-                )}
 
                 {isSpeaking && (
                     <button

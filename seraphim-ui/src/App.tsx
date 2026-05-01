@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef} from "react";
+import { useState, useCallback, useRef } from "react";
 import { useConversation } from "./hooks/useConversation";
 import { useSpeech } from "./hooks/useSpeech";
 import { askSeraphim } from "./hooks/useSeraphimBackend";
@@ -7,7 +7,6 @@ import OrbScreen from "./components/OrbScreen";
 export default function App() {
     const [input, setInput] = useState("");
     const [isThinking, setIsThinking] = useState(false);
-    const [selectedSkill, setSelectedSkill] = useState<string>("react");
 
     const {
         conversations,
@@ -51,7 +50,7 @@ export default function App() {
                     undefined,
                     (sentence) => speakRef.current?.(sentence),
                     engineId,
-                    selectedSkill,
+                    "auto",       // ← skill toujours "auto", le backend route seul
                 );
                 addMessage(response, "assistant", "done");
             } catch {
@@ -62,7 +61,7 @@ export default function App() {
                 setIsThinking(false);
             }
         },
-        [isThinking, addMessage, activeId, engineId, selectedSkill],
+        [isThinking, addMessage, activeId, engineId],
     );
 
     async function handleSend() {
@@ -87,8 +86,6 @@ export default function App() {
             onDeleteConversation={deleteConversation}
             engineId={engineId}
             onEngineChange={setEngineId}
-            selectedSkill={selectedSkill}
-            onSkillChange={setSelectedSkill}
         />
     );
 }

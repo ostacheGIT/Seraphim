@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from seraphim import __version__
 from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.agents.react import ReactAgent
+from seraphim.agents.router import route as auto_route
 from seraphim.engine import get_engine
 from seraphim.settings import settings
 from seraphim.memory.store import (
@@ -41,7 +42,6 @@ app.add_middleware(
 
 # ─── Startup ─────────────────────────────────────────────────────────────────
 
-
 @app.on_event("startup")
 async def startup():
     await init_db()
@@ -56,7 +56,8 @@ EngineId = Optional[Literal["ollama_qwen3b", "ollama_qwen7b"]]
 
 class ChatRequest(BaseModel):
     query: str
-    agent: str = "chat"
+    # "auto" (défaut) = le router choisit automatiquement
+    agent: str = "auto"
     model: str | None = None
     engine_id: EngineId = None
     session_id: str | None = None
@@ -70,6 +71,7 @@ class ChatResponse(BaseModel):
     model: str
     engine_id: str
     session_id: str
+    routed_agent: str   # agent réellement utilisé après routing
 
 
 class TTSRequest(BaseModel):
@@ -77,7 +79,6 @@ class TTSRequest(BaseModel):
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
-
 
 @app.get("/")
 async def root():
@@ -89,7 +90,7 @@ async def health():
     try:
         engine = get_engine()
         _ = await engine.chat(
-            messages=[{"role": "user", "content": "ping"}],  # type: ignore[arg-type]
+            messages=[{"role": "user", "content": "ping"}],
         )
         engine_status = "ok"
     except Exception:
@@ -122,6 +123,7 @@ async def list_agents():
         ]
     }
 
+
 @app.get("/skills")
 async def list_installed_skills():
     from pathlib import Path
@@ -131,7 +133,6 @@ async def list_installed_skills():
         for skill_md in sorted(skills_root.rglob("SKILL.md")):
             name = skill_md.parent.name
             source = skill_md.parent.parent.name
-            # Lire la description depuis le frontmatter
             try:
                 import yaml
                 raw = skill_md.read_text(encoding="utf-8")
@@ -163,13 +164,24 @@ def _resolve_engine_id(req: ChatRequest) -> str:
     return engine_id or "ollama_qwen3b"
 
 
+def _resolve_agent_name(req: ChatRequest) -> str:
+    """
+    Si agent == "auto" (ou non fourni), le router choisit automatiquement.
+    Sinon on respecte le choix explicite.
+    """
+    if req.agent in ("auto", "", None):
+        decision = auto_route(req.query)
+        return decision.agent
+    return req.agent
+
+
 def _build_agent(agent_name: str, engine_id: str):
     _ = get_engine(engine_id)
     if agent_name == "react":
         return ReactAgent(engine_id=engine_id)
     if agent_name.startswith("skill:"):
         from seraphim.agents.base import SkillAgent
-        skill_name = agent_name.split(":", 1)[1]
+        skill_name = agent_name.split(":", 1)
         ag = SkillAgent(skill_name)
         ag.engine_id = engine_id
         return ag
@@ -182,9 +194,10 @@ def _build_agent(agent_name: str, engine_id: str):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
+    routed_agent = _resolve_agent_name(req)
 
     try:
-        ag = _build_agent(req.agent, engine_id)
+        ag = _build_agent(routed_agent, engine_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -192,8 +205,8 @@ async def chat(req: ChatRequest):
     ctx = AgentContext(messages=req.messages) if req.messages else None
     response = await ag.run(req.query, ctx)
 
-    await save_message(session_id, "user", req.query, req.agent)
-    await save_message(session_id, "assistant", response, req.agent)
+    await save_message(session_id, "user", req.query, routed_agent)
+    await save_message(session_id, "assistant", response, routed_agent)
 
     return ChatResponse(
         response=response,
@@ -201,15 +214,17 @@ async def chat(req: ChatRequest):
         model=engine_id,
         engine_id=engine_id,
         session_id=session_id,
+        routed_agent=routed_agent,
     )
 
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
+    routed_agent = _resolve_agent_name(req)
 
     try:
-        ag = _build_agent(req.agent, engine_id)
+        ag = _build_agent(routed_agent, engine_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -218,22 +233,21 @@ async def chat_stream(req: ChatRequest):
 
     result = await ag.run(req.query, ctx)
 
-    await save_message(session_id, "user", req.query, req.agent)
-    await save_message(session_id, "assistant", result, req.agent)
+    await save_message(session_id, "user", req.query, routed_agent)
+    await save_message(session_id, "assistant", result, routed_agent)
 
     async def generator():
         yield result
 
     from fastapi.responses import StreamingResponse as SR
-
     response = SR(generator(), media_type="text/plain")
     response.headers["X-Session-Id"] = session_id
     response.headers["X-Engine-Id"] = engine_id
+    response.headers["X-Routed-Agent"] = routed_agent
     return response
 
 
 # ─── Memory ──────────────────────────────────────────────────────────────────
-
 
 @app.get("/memory/sessions")
 async def get_sessions():
@@ -262,7 +276,6 @@ async def remove_session(session_id: str):
 
 
 # ─── TTS / Voice ─────────────────────────────────────────────────────────────
-
 
 @app.post("/tts/speak")
 async def tts_speak(req: TTSRequest):

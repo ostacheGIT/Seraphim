@@ -1,111 +1,177 @@
-import { Plus, Settings2, Trash2 } from "lucide-react";
-import { Conversation } from "../types";
-import type { EngineId } from "../hooks/useConversation";
-
 interface SidebarProps {
-    conversations: Conversation[];
-    activeId: string | null;
-    onSelect: (id: string) => void;
-    onNew: () => void;
-    onDelete: (id: string) => void;
-    engineId: EngineId;
-    onEngineChange: (id: EngineId) => void;
+    sessions: { session_id: string; title: string; agent: string; updated_at: string }[];
+    currentSession: string | null;
+    routedAgent: string | null;
+    onSelectSession: (id: string) => void;
+    onNewChat: () => void;
+    engineId: string;
+    onEngineChange: (id: string) => void;
 }
 
-function groupByDay(convos: Conversation[]) {
-    const today = new Date().toDateString();
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
-    const groups: Record<string, Conversation[]> = {};
+const ENGINES = [
+    { id: "ollama_qwen3b", label: "Qwen 2.5 3B · Rapide" },
+    { id: "ollama_qwen7b", label: "Qwen 2.5 7B · Précis" },
+];
 
-    for (const c of convos) {
-        const day = new Date(c.updatedAt).toDateString();
-        const label =
-            day === today ? "Aujourd'hui" : day === yesterday ? "Hier" : day;
-        if (!groups[label]) groups[label] = [];
-        groups[label].push(c);
-    }
-    return groups;
-}
+const AGENT_LABELS: Record<string, string> = {
+    chat: "💬 Chat",
+    react: "⚙️ Système",
+    "skill:calculator": "🔢 Calculatrice",
+    "skill:web_search": "🌐 Web Search",
+    "skill:code_interpreter": "🐍 Code",
+    "skill:think": "🧠 Raisonnement",
+};
 
 export default function Sidebar({
-                                    conversations,
-                                    activeId,
-                                    onSelect,
-                                    onNew,
-                                    onDelete,
+                                    sessions,
+                                    currentSession,
+                                    routedAgent,
+                                    onSelectSession,
+                                    onNewChat,
                                     engineId,
                                     onEngineChange,
                                 }: SidebarProps) {
-    const groups = groupByDay(conversations);
-
     return (
-        <aside className="sidebar">
-            <div className="brand">
-                <div className="brand-logo">S</div>
-                <div>
-                    <h1 className="brand-name">Seraphim</h1>
-                    <p className="brand-sub">local · private · yours</p>
-                </div>
+        <aside
+            style={{
+                width: 240,
+                minHeight: "100vh",
+                background: "var(--color-surface, #1c1b19)",
+                borderRight: "1px solid var(--color-border, #393836)",
+                display: "flex",
+                flexDirection: "column",
+                padding: "1rem 0.75rem",
+                gap: "1.25rem",
+            }}
+        >
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span style={{ fontSize: "1.25rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
+                    ✦ Seraphim
+                </span>
             </div>
 
-            <button className="new-chat-btn" onClick={onNew}>
-                <Plus size={16} />
-                <span>New conversation</span>
+            {/* Nouveau chat */}
+            <button
+                onClick={onNewChat}
+                style={{
+                    background: "var(--color-primary, #4f98a3)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "0.5rem",
+                    padding: "0.5rem 1rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    width: "100%",
+                    textAlign: "left",
+                }}
+            >
+                + Nouveau chat
             </button>
 
-            {/* Sélecteur de moteur */}
-            <div className="engine-row">
-                <span className="section-label">Moteur</span>
-                <select
-                    className="engine-select"
-                    value={engineId}
-                    onChange={(e) => onEngineChange(e.target.value as EngineId)}
+            {/* Modèle (seul paramètre réglable) */}
+            <div>
+                <label
+                    style={{
+                        fontSize: "0.75rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: "var(--color-text-muted, #797876)",
+                        marginBottom: "0.35rem",
+                        display: "block",
+                    }}
                 >
-                    <option value="ollama_qwen3b">Qwen 2.5 3B (rapide)</option>
-                    <option value="ollama_qwen7b">Qwen 2.5 7B (précis)</option>
+                    Modèle
+                </label>
+                <select
+                    value={engineId}
+                    onChange={(e) => onEngineChange(e.target.value)}
+                    style={{
+                        width: "100%",
+                        padding: "0.4rem 0.6rem",
+                        borderRadius: "0.375rem",
+                        border: "1px solid var(--color-border, #393836)",
+                        background: "var(--color-surface-2, #201f1d)",
+                        color: "var(--color-text, #cdccca)",
+                        fontSize: "0.875rem",
+                    }}
+                >
+                    {ENGINES.map((e) => (
+                        <option key={e.id} value={e.id}>
+                            {e.label}
+                        </option>
+                    ))}
                 </select>
             </div>
 
-            <div className="conversation-scroll">
-                {Object.entries(groups).map(([label, items]) => (
-                    <div key={label} className="conversation-group">
-                        <div className="section-label">{label}</div>
-                        <div className="conversation-list">
-                            {items.map((c) => (
-                                <div
-                                    key={c.id}
-                                    className={`conversation-item ${
-                                        activeId === c.id ? "active" : ""
-                                    }`}
-                                >
-                                    <button
-                                        className="conversation-title"
-                                        onClick={() => onSelect(c.id)}
-                                    >
-                                        {c.title}
-                                    </button>
-                                    <button
-                                        className="conversation-delete"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onDelete(c.id);
-                                        }}
-                                        aria-label="Supprimer"
-                                    >
-                                        <Trash2 size={13} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                ))}
-            </div>
+            {/* Skill actif (lecture seule — auto-sélectionné) */}
+            {routedAgent && (
+                <div
+                    style={{
+                        background: "var(--color-surface-offset, #1d1c1a)",
+                        borderRadius: "0.5rem",
+                        padding: "0.5rem 0.75rem",
+                        fontSize: "0.8rem",
+                        color: "var(--color-text-muted, #797876)",
+                    }}
+                >
+                    <span style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        Skill actif
+                    </span>
+                    <span style={{ color: "var(--color-primary, #4f98a3)", fontWeight: 600 }}>
+                        {AGENT_LABELS[routedAgent] ?? routedAgent}
+                    </span>
+                    <span style={{ marginLeft: "0.4rem", fontSize: "0.7rem", opacity: 0.6 }}>
+                        (auto)
+                    </span>
+                </div>
+            )}
 
-            <div className="sidebar-footer">
-                <button className="ghost-icon" aria-label="Paramètres">
-                    <Settings2 size={16} />
-                </button>
-                <span className="sidebar-version">v0.1.0</span>
+            {/* Historique */}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+                <label
+                    style={{
+                        fontSize: "0.75rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: "var(--color-text-muted, #797876)",
+                        marginBottom: "0.35rem",
+                        display: "block",
+                    }}
+                >
+                    Historique
+                </label>
+                {sessions.length === 0 && (
+                    <p style={{ fontSize: "0.8rem", color: "var(--color-text-faint, #5a5957)" }}>
+                        Aucune session
+                    </p>
+                )}
+                {sessions.map((s) => (
+                    <button
+                        key={s.session_id}
+                        onClick={() => onSelectSession(s.session_id)}
+                        style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "0.4rem 0.5rem",
+                            borderRadius: "0.375rem",
+                            border: "none",
+                            background: currentSession === s.session_id
+                                ? "var(--color-surface-dynamic, #2d2c2a)"
+                                : "transparent",
+                            color: "var(--color-text, #cdccca)",
+                            fontSize: "0.8rem",
+                            cursor: "pointer",
+                            marginBottom: "0.2rem",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {s.title}
+                    </button>
+                ))}
             </div>
         </aside>
     );

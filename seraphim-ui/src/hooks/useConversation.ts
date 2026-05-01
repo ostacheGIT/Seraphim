@@ -76,8 +76,7 @@ export function useConversation() {
         {
           id: generateId(),
           role: "assistant",
-          content:
-              "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
+          content: "Bonjour ! Je suis Seraphim. Parlez-moi ou écrivez ci-dessous.",
           timestamp: new Date(),
           status: "done",
         },
