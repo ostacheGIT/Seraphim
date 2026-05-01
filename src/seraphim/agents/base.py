@@ -7,6 +7,39 @@ from seraphim.skills.registry import discover_skills, get_all_tools, get_skill, 
 
 discover_skills()
 
+# Matches queries that are purely math: "2 + 2", "sqrt(144)", "3**10", "combien font 5*7", etc.
+_MATH_QUERY_RE = re.compile(
+    r"^(?:"
+    r"(?:combien\s+(?:font|fait|vaut|vale|égal(?:e)?|=)\s+)?"  # French prefix
+    r"(?:calcule?\s+|compute\s+|evaluate\s+|eval\s+)?"         # optional verb
+    r")?"
+    r"(?P<expr>"
+    r"[\d\s\+\-\*\/\%\(\)\.\,\^]+"                             # basic arithmetic chars
+    r"|(?:sqrt|sin|cos|tan|log|abs|round|min|max|pi|e)\b.*"    # math function calls
+    r")"
+    r"[?!.\s]*$",
+    re.I,
+)
+
+
+def _extract_math_expr(query: str) -> str | None:
+    """Return a calculator-friendly expression if the query is pure math, else None."""
+    q = query.strip()
+    m = _MATH_QUERY_RE.match(q)
+    if not m:
+        return None
+    expr = m.group("expr").strip().replace("^", "**").replace(",", ".")
+    # Require at least one digit or named constant to avoid matching words
+    if not re.search(r"[\d]|pi\b|e\b", expr):
+        return None
+    # Reject if it looks like a sentence (contains alpha words > 2 chars that aren't math fns)
+    _MATH_FNS = {"sqrt", "sin", "cos", "tan", "log", "abs", "round", "min", "max", "pi"}
+    words = re.findall(r"[a-zA-Z]{3,}", expr)
+    if any(w.lower() not in _MATH_FNS for w in words):
+        return None
+    return expr
+
+
 # ── Détection directe — bypass LLM total pour les commandes système ───────────
 DIRECT_PATTERNS = [
     (re.compile(r"(?:ouvre|lance|démarre|open|start)\s+(\w+)", re.I),
@@ -43,7 +76,17 @@ class ChatAgent(BaseAgent):
     )
 
     async def run(self, query: str, context: AgentContext = None) -> str:
-        # Bypass LLM pour les commandes système
+        # Bypass LLM — math expressions
+        expr = _extract_math_expr(query)
+        if expr:
+            skill = SKILL_REGISTRY.get("calculator")
+            if skill:
+                result = await skill.run(expression=expr)
+                if result.success:
+                    return result.output
+                # fall through to LLM if expression was invalid
+
+        # Bypass LLM — system commands
         for pattern, builder in DIRECT_PATTERNS:
             m = pattern.search(query)
             if m:
@@ -103,17 +146,34 @@ class ReActAgent(BaseAgent):
         "Available tools:\n"
         "- read_file: read a file. Args: {\"path\": \"C:/Users/ostap/SERAPHIM/file.txt\"}\n"
         "- write_file: write a file. Args: {\"path\": \"...\", \"content\": \"...\"}\n"
-        "- web_search: search the web and return top results. Args: {\"query\": \"...\", \"max_results\": 5}\n\n"
+        "- web_search: search the web. Args: {\"query\": \"...\", \"max_results\": 5}\n"
+        "- think: reason step-by-step before answering. Args: {\"thought\": \"...\"}\n"
+        "- calculator: evaluate math expressions safely. Args: {\"expression\": \"2**10 + sqrt(144)\"}\n"
+        "- code_interpreter: run Python code in a subprocess. Args: {\"code\": \"print(1+1)\", \"timeout\": 15}\n"
+        "- repl: persistent Python REPL (variables survive between calls). Args: {\"code\": \"x = 42\", \"reset\": false}\n"
+        "- http_request: make HTTP requests. Args: {\"url\": \"https://...\", \"method\": \"GET\"}\n\n"
         "IMPORTANT RULES:\n"
         "1. Always use forward slashes in paths (C:/Users/ostap/...), never backslashes.\n"
         "2. After receiving a RESULT, give your final answer using ONLY that result.\n"
         "3. Never invent or hallucinate file content or web results. Only use what RESULT contains.\n"
         "4. The current working directory is: C:/Users/ostap/SERAPHIM\n"
-        "5. For any question about current events, news, or real-time info, ALWAYS use web_search first."
+        "5. For any question about current events, news, or real-time info, ALWAYS use web_search first.\n"
+        "6. Use think before complex multi-step reasoning to plan your approach.\n"
+        "7. Use repl for stateful computation across multiple steps; use code_interpreter for one-shot scripts."
     )
 
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         # ── Détection directe — bypass LLM total ────────────────────────────
+        expr = _extract_math_expr(query)
+        if expr:
+            skill = SKILL_REGISTRY.get("calculator")
+            if skill:
+                try:
+                    result = await skill.run(expression=expr)
+                    return result.output
+                except Exception as e:
+                    return f"Calculator error: {e}"
+
         for pattern, builder in DIRECT_PATTERNS:
             m = pattern.search(query)
             if m:

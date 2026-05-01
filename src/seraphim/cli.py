@@ -123,8 +123,6 @@ def ask(
             for msg in history:
                 ctx.messages.append(msg)
 
-        ctx.add_user(query)
-
         if stream:
             console.print(
                 f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",
