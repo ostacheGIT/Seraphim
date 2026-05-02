@@ -7,6 +7,7 @@ import OrbScreen from "./components/OrbScreen";
 export default function App() {
     const [input, setInput] = useState("");
     const [isThinking, setIsThinking] = useState(false);
+    const [agentId, setAgentId] = useState<string>("auto");
 
     const {
         conversations,
@@ -50,7 +51,7 @@ export default function App() {
                     undefined,
                     (sentence) => speakRef.current?.(sentence),
                     engineId,
-                    "auto",       // ← skill toujours "auto", le backend route seul
+                    agentId,
                 );
                 addMessage(response, "assistant", "done");
             } catch {
@@ -61,7 +62,7 @@ export default function App() {
                 setIsThinking(false);
             }
         },
-        [isThinking, addMessage, activeId, engineId],
+        [isThinking, addMessage, activeId, engineId, agentId],
     );
 
     async function handleSend() {
@@ -86,6 +87,8 @@ export default function App() {
             onDeleteConversation={deleteConversation}
             engineId={engineId}
             onEngineChange={setEngineId}
+            agentId={agentId}
+            onAgentChange={setAgentId}
         />
     );
 }

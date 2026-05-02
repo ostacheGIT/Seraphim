@@ -69,63 +69,72 @@ export default function Sidebar({
                 + Nouveau chat
             </button>
 
-            {/* Modèle (seul paramètre réglable) */}
-            <div>
-                <label
-                    style={{
-                        fontSize: "0.75rem",
+            {/* Moteur + Agent sur la même ligne */}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                {/* Colonne gauche — moteur */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <label style={{
+                        fontSize: "0.7rem",
                         textTransform: "uppercase",
                         letterSpacing: "0.08em",
                         color: "var(--color-text-muted, #797876)",
-                        marginBottom: "0.35rem",
+                        marginBottom: "0.3rem",
                         display: "block",
-                    }}
-                >
-                    Modèle
-                </label>
-                <select
-                    value={engineId}
-                    onChange={(e) => onEngineChange(e.target.value)}
-                    style={{
-                        width: "100%",
-                        padding: "0.4rem 0.6rem",
+                    }}>
+                        Moteur
+                    </label>
+                    <select
+                        value={engineId}
+                        onChange={(e) => onEngineChange(e.target.value)}
+                        style={{
+                            width: "100%",
+                            padding: "0.35rem 0.4rem",
+                            borderRadius: "0.375rem",
+                            border: "1px solid var(--color-border, #393836)",
+                            background: "var(--color-surface-2, #201f1d)",
+                            color: "var(--color-text, #cdccca)",
+                            fontSize: "0.75rem",
+                        }}
+                    >
+                        {ENGINES.map((e) => (
+                            <option key={e.id} value={e.id}>{e.label}</option>
+                        ))}
+                    </select>
+                </div>
+
+                {/* Colonne droite — agent/skill */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <label style={{
+                        fontSize: "0.7rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: "var(--color-text-muted, #797876)",
+                        marginBottom: "0.3rem",
+                        display: "block",
+                    }}>
+                        Agent
+                    </label>
+                    <div style={{
+                        padding: "0.35rem 0.4rem",
                         borderRadius: "0.375rem",
                         border: "1px solid var(--color-border, #393836)",
                         background: "var(--color-surface-2, #201f1d)",
-                        color: "var(--color-text, #cdccca)",
-                        fontSize: "0.875rem",
-                    }}
-                >
-                    {ENGINES.map((e) => (
-                        <option key={e.id} value={e.id}>
-                            {e.label}
-                        </option>
-                    ))}
-                </select>
-            </div>
-
-            {/* Skill actif (lecture seule — auto-sélectionné) */}
-            {routedAgent && (
-                <div
-                    style={{
-                        background: "var(--color-surface-offset, #1d1c1a)",
-                        borderRadius: "0.5rem",
-                        padding: "0.5rem 0.75rem",
-                        fontSize: "0.8rem",
-                        color: "var(--color-text-muted, #797876)",
-                    }}
-                >
-                    <span style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        Skill actif
-                    </span>
-                    <span style={{ color: "var(--color-primary, #4f98a3)", fontWeight: 600 }}>
-                        {AGENT_LABELS[routedAgent] ?? routedAgent}
-                    </span>
-                    <span style={{ marginLeft: "0.4rem", fontSize: "0.7rem", opacity: 0.6 }}>
-                        (auto)
-                    </span>
+                        fontSize: "0.75rem",
+                        color: routedAgent
+                            ? "var(--color-primary, #4f98a3)"
+                            : "var(--color-text-faint, #5a5957)",
+                        fontWeight: routedAgent ? 600 : 400,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        height: "1.9rem",
+                        display: "flex",
+                        alignItems: "center",
+                    }}>
+                        {routedAgent ? (AGENT_LABELS[routedAgent] ?? routedAgent) : "—"}
+                    </div>
                 </div>
-            )}
+            </div>
 
             {/* Historique */}
             <div style={{ flex: 1, overflowY: "auto" }}>

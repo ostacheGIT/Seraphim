@@ -81,7 +81,6 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     agent: str
-    model: str
     engine_id: str
     session_id: str
     routed_agent: str   # agent réellement utilisé après routing
@@ -224,7 +223,6 @@ async def chat(req: ChatRequest):
     return ChatResponse(
         response=response,
         agent=req.agent,
-        model=engine_id,
         engine_id=engine_id,
         session_id=session_id,
         routed_agent=routed_agent,

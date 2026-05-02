@@ -3,11 +3,14 @@
 Utilisé par les skills externes qui ont `allowed-tools: Bash(...)` dans leur SKILL.md.
 """
 
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
 from seraphim.skills.base import BaseSkill, SkillResult
+
+logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT = 6000
 
@@ -44,6 +47,7 @@ class ShellSkill(BaseSkill):
         return env
 
     async def run(self, command: str, timeout: int = 60, **kwargs) -> SkillResult:
+        logger.info("shell exec: %s", command)
         try:
             proc = subprocess.run(
                 command,

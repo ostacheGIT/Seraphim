@@ -22,7 +22,19 @@ interface OrbScreenProps {
     onDeleteConversation: (id: string) => void;
     engineId: EngineId;
     onEngineChange: (id: EngineId) => void;
+    agentId: string;
+    onAgentChange: (id: string) => void;
 }
+
+const AGENTS = [
+    { id: "auto",                  label: "⚡ Auto" },
+    { id: "chat",                  label: "💬 Chat" },
+    { id: "react",                 label: "⚙️ Système" },
+    { id: "skill:calculator",      label: "🔢 Calculatrice" },
+    { id: "skill:web_search",      label: "🌐 Web Search" },
+    { id: "skill:code_interpreter",label: "🐍 Code" },
+    { id: "skill:think",           label: "🧠 Raisonnement" },
+];
 
 export default function OrbScreen({
                                       conversation,
@@ -41,11 +53,24 @@ export default function OrbScreen({
                                       onDeleteConversation,
                                       engineId,
                                       onEngineChange,
+                                      agentId,
+                                      onAgentChange,
                                   }: OrbScreenProps) {
     const [panelOpen, setPanelOpen] = useState(false);
     const [panelWidth, setPanelWidth] = useState(340);
     const [resizing, setResizing] = useState(false);
+    const [view, setView] = useState<"list" | "chat">("list");
     const chatBottomRef = useRef<HTMLDivElement>(null);
+
+    const handleSelectConversation = (id: string) => {
+        onSelectConversation(id);
+        setView("chat");
+    };
+
+    const handleNewConversation = () => {
+        onNewConversation();
+        setView("chat");
+    };
 
     const handleResizeStart = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -109,119 +134,130 @@ export default function OrbScreen({
                 style={resizing ? { transition: "none" } : undefined}
             >
                 <div className="panel-header">
-                    <span className="panel-title">CONVERSATIONS</span>
-                    <button
-                        className="new-chat-btn"
-                        onClick={onNewConversation}
-                        aria-label="Nouvelle"
-                    >
-                        <Plus size={14} />
-                    </button>
+                    {view === "chat" ? (
+                        <>
+                            <button
+                                className="new-chat-btn"
+                                onClick={() => setView("list")}
+                                aria-label="Retour à la liste"
+                                style={{ fontSize: "18px", fontWeight: 300, lineHeight: 1, padding: "2px 6px" }}
+                            >
+                                &lt;
+                            </button>
+                            <span className="panel-title" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {conversation?.title ?? "Conversation"}
+                            </span>
+                        </>
+                    ) : (
+                        <>
+                            <span className="panel-title">CONVERSATIONS</span>
+                            <button
+                                className="new-chat-btn"
+                                onClick={handleNewConversation}
+                                aria-label="Nouvelle"
+                            >
+                                <Plus size={14} />
+                            </button>
+                        </>
+                    )}
                 </div>
 
-                {/* Moteur */}
-                <div className="engine-block">
-                    <div className="engine-header">
+                {/* Moteur + Agent sur la même ligne */}
+                <div style={{ display: "flex", gap: "0.5rem", margin: "0.6rem 1rem" }}>
+                    {/* Moteur — gauche */}
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                         <span className="section-label">Moteur</span>
-                    </div>
-                    <select
-                        className="engine-select"
-                        value={engineId}
-                        onChange={(e) => onEngineChange(e.target.value as EngineId)}
-                    >
-                        <option value="ollama_qwen3b">Qwen 2.5 3B (rapide)</option>
-                        <option value="ollama_qwen7b">Qwen 2.5 7B (précis)</option>
-                    </select>
-                </div>
-
-                {/* Skill — lecture seule */}
-                <div className="engine-block">
-                    <div className="engine-header">
-                        <span className="section-label">Agent / Skill</span>
-                    </div>
-                    <div style={{
-                        padding: "6px 10px",
-                        borderRadius: "6px",
-                        background: "rgba(167,139,250,0.08)",
-                        border: "1px solid rgba(167,139,250,0.2)",
-                        fontSize: "12px",
-                        color: "var(--accent, #a78bfa)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                    }}>
-                        <span style={{ opacity: 0.6, fontSize: "10px" }}>⚡</span>
-                        Sélection automatique
-                        <span style={{
-                            marginLeft: "auto",
-                            fontSize: "10px",
-                            opacity: 0.5,
-                            fontStyle: "italic",
-                        }}>
-                            auto
-                        </span>
-                    </div>
-                </div>
-
-                {/* Liste conversations */}
-                <div className="conversation-list">
-                    {conversations.length === 0 && (
-                        <p className="empty-hint">Aucune conversation</p>
-                    )}
-                    {conversations.map((c) => (
-                        <div
-                            key={c.id}
-                            className={`conv-item ${activeId === c.id ? "active" : ""}`}
+                        <select
+                            className="engine-select"
+                            value={engineId}
+                            onChange={(e) => onEngineChange(e.target.value as EngineId)}
+                            style={{ width: "100%" }}
                         >
-                            <button
-                                className="conv-title"
-                                onClick={() => onSelectConversation(c.id)}
-                            >
-                                {c.title}
-                            </button>
-                            <button
-                                className="conv-delete"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onDeleteConversation(c.id);
-                                }}
-                                aria-label="Supprimer"
-                            >
-                                <Trash2 size={12} />
-                            </button>
-                        </div>
-                    ))}
+                            <option value="ollama_qwen3b">Qwen 2.5 3B · Rapide</option>
+                            <option value="ollama_qwen7b">Qwen 2.5 7B · Précis</option>
+                        </select>
+                    </div>
+
+                    {/* Agent / Skill — droite */}
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                        <span className="section-label">Agent</span>
+                        <select
+                            className="engine-select"
+                            value={agentId}
+                            onChange={(e) => onAgentChange(e.target.value)}
+                            style={{ width: "100%" }}
+                        >
+                            {AGENTS.map((a) => (
+                                <option key={a.id} value={a.id}>{a.label}</option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
-                {/* Messages */}
-                <div className="chat-messages">
-                    {conversation?.messages.map((msg) => (
-                        <MessageBubble key={msg.id} message={msg} />
-                    ))}
-                    {isThinking && (
-                        <div className="chat-msg assistant">
-                            <div className="msg-role">SERAPHIM</div>
-                            <div className="msg-content thinking-dots">
-                                <span />
-                                <span />
-                                <span />
+                {/* Vue liste — occupe tout l'espace disponible */}
+                {view === "list" && (
+                    <div className="conversation-list">
+                        {conversations.length === 0 && (
+                            <p className="empty-hint">Aucune conversation</p>
+                        )}
+                        {conversations.map((c) => (
+                            <div
+                                key={c.id}
+                                className={`conv-item ${activeId === c.id ? "active" : ""}`}
+                            >
+                                <button
+                                    className="conv-title"
+                                    onClick={() => handleSelectConversation(c.id)}
+                                >
+                                    {c.title}
+                                </button>
+                                <button
+                                    className="conv-delete"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onDeleteConversation(c.id);
+                                    }}
+                                    aria-label="Supprimer"
+                                >
+                                    <Trash2 size={12} />
+                                </button>
                             </div>
-                        </div>
-                    )}
-                    <div ref={chatBottomRef} />
-                </div>
+                        ))}
+                    </div>
+                )}
 
-                {/* Input texte */}
-                <div className="chat-input-area">
-                    <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => onInputChange(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Tapez un message..."
-                        className="chat-input"
-                    />
-                </div>
+                {/* Vue conversation */}
+                {view === "chat" && (
+                    <>
+                        <div className="chat-messages">
+                            {conversation?.messages.map((msg) => (
+                                <MessageBubble key={msg.id} message={msg} />
+                            ))}
+                            {isThinking && (
+                                <div className="chat-msg assistant">
+                                    <div className="msg-role">SERAPHIM</div>
+                                    <div className="msg-content thinking-dots">
+                                        <span />
+                                        <span />
+                                        <span />
+                                    </div>
+                                </div>
+                            )}
+                            <div ref={chatBottomRef} />
+                        </div>
+
+                        <div className="chat-input-area">
+                            <input
+                                type="text"
+                                value={input}
+                                onChange={(e) => onInputChange(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Tapez un message..."
+                                className="chat-input"
+                            />
+                        </div>
+                    </>
+                )}
 
                 {/* Resize handle */}
                 <div

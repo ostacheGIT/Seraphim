@@ -6,6 +6,7 @@ Firefox supporté en mode limité.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -13,10 +14,45 @@ from urllib.parse import quote
 from seraphim.skills.base import BaseSkill, SkillResult
 from seraphim.skills.core.shell import ShellSkill
 
+_FALLBACK_PATHS: dict[str, dict[str, str]] = {
+    "win32": {
+        "chrome":  r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        "edge":    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        "firefox": r"C:\Program Files\Mozilla Firefox\firefox.exe",
+    },
+    "darwin": {
+        "chrome":  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "edge":    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "firefox": "/Applications/Firefox.app/Contents/MacOS/firefox",
+    },
+    "linux": {
+        "chrome":  "/usr/bin/google-chrome",
+        "edge":    "/usr/bin/microsoft-edge",
+        "firefox": "/usr/bin/firefox",
+    },
+}
+
+_PATH_EXES: dict[str, list[str]] = {
+    "chrome":  ["google-chrome", "chrome", "chromium", "chromium-browser"],
+    "edge":    ["microsoft-edge", "msedge"],
+    "firefox": ["firefox"],
+}
+
+
+def _find_browser(name: str) -> str | None:
+    for exe in _PATH_EXES.get(name, []):
+        found = shutil.which(exe)
+        if found:
+            return found
+    platform = sys.platform if sys.platform in ("win32", "darwin") else "linux"
+    path = _FALLBACK_PATHS.get(platform, {}).get(name)
+    return path if path and Path(path).exists() else None
+
+
 _BROWSERS: dict[str, str] = {
-    "chrome":  r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    "edge":    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    "firefox": r"C:\Program Files\Mozilla Firefox\firefox.exe",
+    name: path
+    for name in ("chrome", "edge", "firefox")
+    if (path := _find_browser(name)) is not None
 }
 
 # CDP-compatible (Chromium-based) — agent-browser fully supported
@@ -70,12 +106,7 @@ def _extract_search_text(raw: str) -> str:
 
 
 def _detect_browsers() -> dict[str, str]:
-    """Return {name: exe_path} for each installed browser."""
-    found: dict[str, str] = {}
-    for name, path in _BROWSERS.items():
-        if Path(path).exists():
-            found[name] = path
-    return found
+    return dict(_BROWSERS)
 
 
 def _best_cdp_browser() -> tuple[str, str] | None:
