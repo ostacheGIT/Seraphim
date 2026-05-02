@@ -34,6 +34,15 @@ class ShellSkill(BaseSkill):
         "required": ["command"],
     }
 
+    @staticmethod
+    def _build_env() -> dict:
+        env = os.environ.copy()
+        # Ensure npm global bin is in PATH (Windows: not always included by subprocess)
+        npm_global = Path.home() / "AppData" / "Roaming" / "npm"
+        if npm_global.exists():
+            env["PATH"] = str(npm_global) + os.pathsep + env.get("PATH", "")
+        return env
+
     async def run(self, command: str, timeout: int = 60, **kwargs) -> SkillResult:
         try:
             proc = subprocess.run(
@@ -41,6 +50,7 @@ class ShellSkill(BaseSkill):
                 shell=True,
                 capture_output=True,  # bytes mode — decode manually
                 timeout=timeout,
+                env=self._build_env(),
             )
             enc = "utf-8"
             stdout = proc.stdout.decode(enc, errors="replace")[:_MAX_OUTPUT] if proc.stdout else ""

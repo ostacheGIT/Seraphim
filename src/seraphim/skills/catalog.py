@@ -1,4 +1,4 @@
-"""Skill catalog — index plat de tous les skills disponibles (openclaw + hermes + installés).
+"""Skill catalog — index plat de tous les skills disponibles (caches + installés).
 
 Workflow:
     seraphim skill build-index   →  scanne les caches, écrit ~/.seraphim/skill-catalog.json
@@ -44,7 +44,7 @@ def _read_frontmatter(path: Path, default_name: str) -> tuple[str, str]:
     return str(fm.get("name", default_name)), str(fm.get("description", ""))
 
 
-# ── Scanners par source ─────────────────────────���──────────────────────────────
+# ── Scanners par source ───────────────────────────────────────────────────────
 
 def _scan_openclaw(cache_root: Path, entries: list) -> int:
     """skills/<skill-name>/SKILL.md — structure plate (openclaw/openclaw repo)."""
@@ -126,6 +126,8 @@ def _scan_skillssh(cache_root: Path, entries: list) -> int:
 def _scan_installed(skills_root: Path, entries: list) -> int:
     """~/.seraphim/skills/<source?>/<skill>/SKILL.md  (rglob)"""
     count = 0
+    if not skills_root.exists():
+        return 0
     for skill_md in skills_root.rglob("SKILL.md"):
         skill_dir = skill_md.parent
         name, desc = _read_frontmatter(skill_md, skill_dir.name)
@@ -140,11 +142,39 @@ def _scan_installed(skills_root: Path, entries: list) -> int:
     return count
 
 
-# ── Builder public ────────────────────────────────────────────────────────────��
+def _scan_generic(cache_root: Path, entries: list) -> int:
+    """Scanner générique pour sources non connues (voltagent, leoye, autonomys, etc.)."""
+    count = 0
+    if not cache_root.exists():
+        return 0
+    for skill_md in cache_root.rglob("SKILL.md"):
+        skill_dir = skill_md.parent
+        # Évite de remonter trop profondément dans l'arborescence (sécurité / perf)
+        try:
+            rel_parts = skill_md.relative_to(cache_root).parts
+        except ValueError:
+            continue
+        if len(rel_parts) > 6:
+            continue
+        name, desc = _read_frontmatter(skill_md, skill_dir.name)
+        source_name = cache_root.name
+        entries.append({
+            "name": name,
+            "slug": skill_dir.name,
+            "description": desc,
+            "source": source_name,
+            "category": skill_dir.parent.name,
+        })
+        count += 1
+    return count
+
+
+# ── Builder public ────────────────────────────────────────────────────────────
 
 def build_catalog(progress_callback=None) -> int:
     """
-    Scanne les caches openclaw + hermes + skills installés.
+    Scanne dynamiquement tous les caches dans ~/.seraphim/skill-cache/
+    + les skills installés dans ~/.seraphim/skills/.
     Écrit l'index dans ~/.seraphim/skill-catalog.json.
     Retourne le nombre de skills indexés.
 
@@ -153,22 +183,27 @@ def build_catalog(progress_callback=None) -> int:
     global _catalog_cache
     entries: list[Dict] = []
 
-    openclaw_root = Path("~/.seraphim/skill-cache/openclaw").expanduser()
-    n = _scan_openclaw(openclaw_root, entries)
-    if progress_callback:
-        progress_callback("openclaw", n)
+    cache_base = Path("~/.seraphim/skill-cache").expanduser()
 
-    hermes_root = Path("~/.seraphim/skill-cache/hermes").expanduser()
-    n = _scan_hermes(hermes_root, entries)
-    if progress_callback:
-        progress_callback("hermes", n)
+    # Scanners dédiés pour les sources connues, fallback générique pour les autres
+    DEDICATED_SCANNERS = {
+        "openclaw": _scan_openclaw,
+        "hermes":   _scan_hermes,
+        "skillssh": _scan_skillssh,
+    }
 
-    # skills.sh — vercel officiel + skills fetchés à la demande
-    skillssh_root = Path("~/.seraphim/skill-cache/skillssh").expanduser()
-    n = _scan_skillssh(skillssh_root, entries)
-    if progress_callback:
-        progress_callback("skillssh", n)
+    if cache_base.exists():
+        for source_dir in sorted(cache_base.iterdir()):
+            if not source_dir.is_dir():
+                continue
+            source_name = source_dir.name
+            scanner = DEDICATED_SCANNERS.get(source_name, _scan_generic)
+            n = scanner(source_dir, entries)
+            LOGGER.debug("Scanned %s: %d skills", source_name, n)
+            if progress_callback:
+                progress_callback(source_name, n)
 
+    # Skills importés manuellement
     installed_root = Path("~/.seraphim/skills").expanduser()
     n = _scan_installed(installed_root, entries)
     if progress_callback:
@@ -186,7 +221,29 @@ def build_catalog(progress_callback=None) -> int:
     return len(entries)
 
 
-# ── Chargement in-memory ─────────────────────────────────��─────────────────────
+# ── Chargement in-memory ──────────────────────────────────────────────────────
+
+_SOURCE_PRIORITY = {
+    "installed": 0,
+    "skillssh": 1,
+    "hermes": 2,
+    "openclaw": 3,
+    "voltagent": 4,
+    "autonomys": 5,
+    "leoye": 6,
+}
+
+
+def _dedup_catalog(entries: list[Dict]) -> list[Dict]:
+    """Keep one entry per skill name — highest-priority source wins."""
+    best: dict[str, tuple[int, Dict]] = {}
+    for entry in entries:
+        name = entry["name"].lower()
+        prio = _SOURCE_PRIORITY.get(entry.get("source", ""), 99)
+        if name not in best or prio < best[name][0]:
+            best[name] = (prio, entry)
+    return [e for _, e in best.values()]
+
 
 def _load_catalog() -> list[Dict]:
     global _catalog_cache
@@ -195,7 +252,8 @@ def _load_catalog() -> list[Dict]:
     p = CATALOG_PATH.expanduser()
     if p.exists():
         try:
-            _catalog_cache = json.loads(p.read_text(encoding="utf-8"))
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            _catalog_cache = _dedup_catalog(raw)
         except (json.JSONDecodeError, OSError):
             _catalog_cache = []
     else:
@@ -207,7 +265,7 @@ def get_catalog_size() -> int:
     return len(_load_catalog())
 
 
-# ── Recherche ─────────────────────────────��───────────────────────────────��───
+# ── Recherche ─────────────────────────────────────────────────────────────────
 
 def search_skills(query: str, top_k: int = 15) -> list[Dict]:
     """
@@ -225,13 +283,21 @@ def search_skills(query: str, top_k: int = 15) -> list[Dict]:
 
     scored: list[tuple[int, Dict]] = []
     for entry in catalog:
-        text = f"{entry['name']} {entry.get('description', '')} {entry.get('category', '')}".lower()
-        score = sum(1 for w in q_words if w in text)
-        if score > 0:
-            # Bonus: mot exact dans le nom du skill
-            if any(w in entry["name"].lower() for w in q_words):
-                score += 2
-            scored.append((score, entry))
+        name_lower = entry["name"].lower()
+        desc_lower = entry.get("description", "").lower()
+
+        desc_hits = sum(1 for w in q_words if w in desc_lower)
+        name_hits = sum(1 for w in q_words if w in name_lower)
+        score = desc_hits + name_hits
+        if score == 0:
+            continue
+        # Bonus: all query words found in description (more specific than name match)
+        if desc_hits == len(q_words):
+            score += 3
+        # Bonus: any word in name
+        if name_hits:
+            score += 1
+        scored.append((score, entry))
 
     scored.sort(key=lambda x: -x[0])
     return [e for _, e in scored[:top_k]]

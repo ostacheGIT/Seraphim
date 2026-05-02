@@ -19,7 +19,7 @@ from rich.table import Table
 app = typer.Typer(name="skill", help="Gérer les skills externes Seraphim.")
 console = Console()
 
-_SOURCE_CHOICES = ["hermes", "openclaw", "skillssh", "github"]
+_SOURCE_CHOICES = ["hermes", "openclaw", "skillssh", "voltagent", "leoye", "autonomys", "github"]
 
 
 def _make_resolver(source: str, github_url: Optional[str] = None):
@@ -32,6 +32,15 @@ def _make_resolver(source: str, github_url: Optional[str] = None):
         return OpenClawResolver()
     if source == "skillssh":
         return SkillsShResolver()
+    if source == "voltagent":
+        cache = Path.home() / ".seraphim" / "skill-cache" / "voltagent"
+        return GitHubResolver(cache_root=cache, repo_url="https://github.com/VoltAgent/awesome-openclaw-skills")
+    if source == "leoye":
+        cache = Path.home() / ".seraphim" / "skill-cache" / "leoye"
+        return GitHubResolver(cache_root=cache, repo_url="https://github.com/LeoYeAI/openclaw-master-skills")
+    if source == "autonomys":
+        cache = Path.home() / ".seraphim" / "skill-cache" / "autonomys"
+        return GitHubResolver(cache_root=cache, repo_url="https://github.com/autonomys/openclaw-skills")
     if source == "github":
         if not github_url:
             console.print("[red]✗ --github-url requis pour la source 'github'[/red]")
@@ -149,8 +158,8 @@ def skill_build_index():
 
 @app.command("sync-all")
 def skill_sync_all():
-    """Synchronise OpenClaw (~13 700 skills) et Hermes (~150 skills) en une commande."""
-    for source in ["openclaw", "hermes", "skillssh"]:
+    """Synchronise OpenClaw (~50 skills) et Hermes (~150 skills) en une commande."""
+    for source in ["openclaw", "hermes", "skillssh", "voltagent", "leoye", "autonomys"] :
         resolver = _make_resolver(source)
         console.print(f"[dim]Sync {source}...[/dim]", end=" ")
         try:

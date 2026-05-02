@@ -101,6 +101,7 @@ DIRECT_PATTERNS = [
      lambda m: ("system_control", {"action": "sleep"})),
     (re.compile(r"(?:luminosité|brightness)\s+(?:à|a|=)?\s*(\d+)", re.I),
      lambda m: ("set_brightness", {"level": int(m.group(1))})),
+    # Generic web search (API, fast) — no browser keyword
     (re.compile(r"(?:cherche|recherche|google|trouve|search|quoi de neuf sur|news sur|infos sur)\s+(.+)", re.I),
      lambda m: ("web_search", {"query": m.group(1)})),
     (re.compile(r"(?:liste|list|affiche|montre|show)\s+(?:les\s+)?(?:fichiers?|dossiers?|files?)\s+(?:dans|in|de|of|du|à|at)\s+(.+)", re.I),
@@ -273,15 +274,20 @@ class ReActAgent(BaseAgent):
             "- code_interpreter: run Python code in a subprocess. Args: {\"code\": \"print(1+1)\", \"timeout\": 15}\n"
             "- repl: persistent Python REPL (variables survive between calls). Args: {\"code\": \"x = 42\", \"reset\": false}\n"
             "- http_request: make HTTP requests. Args: {\"url\": \"https://...\", \"method\": \"GET\"}\n"
-            "- shell: run any shell/CLI command. Args: {\"command\": \"agent-browser screenshot https://...\", \"timeout\": 60}\n\n"
+            "- shell: run any shell/CLI command. Args: {\"command\": \"agent-browser screenshot https://...\", \"timeout\": 60}\n"
+            "- browser_navigate: open URL in real browser (Chrome/Edge), read page content or take screenshot. Args: {\"url\": \"https://...\", \"action\": \"read|snapshot|screenshot\", \"browser\": \"auto|chrome|edge|firefox\", \"output_file\": \"shot.png\"}\n"
+            "- browser_search: search the web using a real browser. ALWAYS use engine='bing'. For technical topics (code, libraries, software), translate query to English for better results. Args: {\"query\": \"...\", \"engine\": \"bing\", \"browser\": \"auto\"}\n"
+            "- browser_list: list installed browsers on this PC. Args: {}\n\n"
             "IMPORTANT RULES:\n"
             "1. Always use forward slashes in paths, never backslashes.\n"
             "2. After receiving a RESULT, give your final answer using ONLY that result.\n"
             "3. Never invent or hallucinate file content or web results. Only use what RESULT contains.\n"
             f"4. The current working directory is: {cwd}\n"
-            "5. For any question about current events, news, or real-time info, ALWAYS use web_search first.\n"
-            "6. Use think before complex multi-step reasoning to plan your approach.\n"
-            "7. Use repl for stateful computation across multiple steps; use code_interpreter for one-shot scripts."
+            "5. If user says 'navigateur', 'browser', 'chrome', 'edge', 'firefox', 'bing': use browser_search (engine='bing') or browser_navigate — NOT web_search. NEVER use engine='google' in browser_search — it shows bot warnings.\n"
+            "6. For generic web searches (no browser keyword): use web_search first (fast API). Fallback to browser_search if no results.\n"
+            "7. For opening/reading specific websites: prefer browser_navigate (handles JS, login state).\n"
+            "7. Use think before complex multi-step reasoning to plan your approach.\n"
+            "8. Use repl for stateful computation across multiple steps; use code_interpreter for one-shot scripts."
         )
 
     async def run(self, query: str, context: AgentContext | None = None) -> str:
@@ -308,18 +314,55 @@ class ReActAgent(BaseAgent):
                 except Exception as e:
                     return f"Calculator error: {e}"
 
-        for pattern, builder in DIRECT_PATTERNS:
-            m = pattern.search(query)
-            if m:
-                skill_name, kwargs = builder(m)
-                skill = SKILL_REGISTRY.get(skill_name)
-                if not skill:
-                    return f"Skill '{skill_name}' non trouvé."
-                try:
-                    result = await skill.run(**kwargs)
-                    return result.output if result.output else (result.error or "(no output)")
-                except Exception as e:
-                    return f"Erreur : {e}"
+        # ── Browser search — déterministe + synthèse LLM ───────────────────
+        # Pattern: "cherche ... dans le navigateur : <query>"
+        #          "recherche sur chrome/edge/bing : <query>"
+        _BROWSER_SEARCH_RE = re.compile(
+            r"(?:cherche(?:r)?|recherche(?:r)?|trouve(?:r)?|search|infos?|nouvelles?|news)\s+.*?"
+            r"(?:dans\s+le\s+navigateur|avec\s+le\s+navigateur|via\s+le\s+navigateur"
+            r"|sur\s+(?:chrome|edge|firefox|bing))"
+            r"\s*[:\-]?\s*(.+)"
+            r"|(?:cherche(?:r)?|recherche(?:r)?|trouve(?:r)?|search|infos?|nouvelles?|news)"
+            r"\s*[:\-]\s*(.+)",
+            re.I | re.S,
+        )
+        _BROWSER_KW = re.compile(
+            r"\b(navigateur|browser|chrome|edge|firefox|bing)\b", re.I
+        )
+        if _BROWSER_KW.search(query):
+            bm = _BROWSER_SEARCH_RE.search(query)
+            search_query = (bm.group(1) or bm.group(2) or "").strip() if bm else query
+            # Extract after colon if present: "cherche : python 3.13 news"
+            if ":" in search_query:
+                search_query = search_query.split(":", 1)[-1].strip()
+            browser_skill = SKILL_REGISTRY.get("browser_search")
+            if browser_skill and search_query:
+                raw = await browser_skill.run(query=search_query, engine="bing", timeout=90)
+                tool_output = raw.output if raw.success else f"Erreur: {raw.error}"
+                # LLM synthesis of browser results
+                ctx = self.build_context(
+                    f"Browser search results for '{search_query}':\n\n{tool_output}\n\n"
+                    "Based ONLY on these results, give a concise answer in the user's language. "
+                    "Cite titles and URLs. Do not invent information not in the results.",
+                    context,
+                )
+                return await self._chat(ctx.messages)
+
+        # Skip web_search DIRECT_PATTERN if browser keyword present
+        _skip_web_direct = bool(_BROWSER_KW.search(query))
+        if not _skip_web_direct:
+            for pattern, builder in DIRECT_PATTERNS:
+                m = pattern.search(query)
+                if m:
+                    skill_name, kwargs = builder(m)
+                    skill = SKILL_REGISTRY.get(skill_name)
+                    if not skill:
+                        return f"Skill '{skill_name}' non trouvé."
+                    try:
+                        result = await skill.run(**kwargs)
+                        return result.output if result.output else (result.error or "(no output)")
+                    except Exception as e:
+                        return f"Erreur : {e}"
 
         # ── Injection dynamique des skills du catalogue ──────────────────────
         ctx = self.build_context(query, context)
