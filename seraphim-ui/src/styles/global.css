@@ -138,6 +138,29 @@ button, input, select, textarea {
     transform: translateX(0);
 }
 
+.panel-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 60;
+    background: transparent;
+    transition: background 0.15s;
+    border-radius: 0 3px 3px 0;
+}
+.panel-resize-handle:hover,
+.panel-resize-handle.dragging {
+    background: rgba(167, 139, 250, 0.35);
+}
+
+.chat-panel:has(.panel-resize-handle.dragging) ~ *,
+body:has(.panel-resize-handle.dragging) {
+    user-select: none;
+    cursor: col-resize;
+}
+
 .panel-header {
     display: flex;
     align-items: center;

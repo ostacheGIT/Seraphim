@@ -43,7 +43,28 @@ export default function OrbScreen({
                                       onEngineChange,
                                   }: OrbScreenProps) {
     const [panelOpen, setPanelOpen] = useState(false);
+    const [panelWidth, setPanelWidth] = useState(340);
+    const [resizing, setResizing] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
+
+    const handleResizeStart = (e: React.MouseEvent) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = panelWidth;
+        setResizing(true);
+
+        const onMove = (ev: MouseEvent) => {
+            const next = Math.min(800, Math.max(220, startW + (ev.clientX - startX)));
+            setPanelWidth(next);
+        };
+        const onUp = () => {
+            setResizing(false);
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    };
 
     useEffect(() => {
         chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -70,7 +91,7 @@ export default function OrbScreen({
                 : "cliquez pour parler";
 
     return (
-        <div className="orb-root">
+        <div className="orb-root" style={{ ["--panel-w" as string]: `${panelWidth}px` }}>
             {/* Hamburger */}
             <button
                 className={`hamburger ${panelOpen ? "open" : ""}`}
@@ -83,7 +104,10 @@ export default function OrbScreen({
             </button>
 
             {/* Slide-in chat panel */}
-            <aside className={`chat-panel ${panelOpen ? "open" : ""}`}>
+            <aside
+                className={`chat-panel ${panelOpen ? "open" : ""}`}
+                style={resizing ? { transition: "none" } : undefined}
+            >
                 <div className="panel-header">
                     <span className="panel-title">CONVERSATIONS</span>
                     <button
@@ -198,6 +222,13 @@ export default function OrbScreen({
                         className="chat-input"
                     />
                 </div>
+
+                {/* Resize handle */}
+                <div
+                    className={`panel-resize-handle${resizing ? " dragging" : ""}`}
+                    onMouseDown={handleResizeStart}
+                    aria-hidden
+                />
             </aside>
 
             {/* Orbe principal — Three.js WebGL */}
