@@ -2,9 +2,47 @@
 
 import json
 import re
+import subprocess
+from datetime import datetime
 from pathlib import Path
 from seraphim.agents.core import AgentContext, BaseAgent
 from seraphim.skills.registry import discover_skills, get_all_tools, get_skill, SKILL_REGISTRY
+
+# State set by CoderAgent — used for execution confirmation
+_pending_code: str | None = None
+_pending_file: str | None = None
+
+_MAX_OUTPUT = 4000
+
+
+async def _run_code(code: str, file_path: str | None) -> str:
+    """Run generated code. Prefer executing the saved file; fall back to code_interpreter."""
+    import sys as _sys
+    if file_path and Path(file_path).exists():
+        try:
+            proc = subprocess.run(
+                [_sys.executable, file_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            stdout = (proc.stdout or "")[:_MAX_OUTPUT]
+            stderr = (proc.stderr or "")[:_MAX_OUTPUT]
+            output = stdout
+            if stderr:
+                output += f"\n--- stderr ---\n{stderr}"
+            output = output.strip() or "(no output)"
+            if proc.returncode != 0:
+                return f"Erreur d'exécution:\n{output}"
+            return output
+        except subprocess.TimeoutExpired:
+            return "Erreur d'exécution: timeout (30s)"
+        except Exception as e:
+            pass  # fall through to code_interpreter
+    # Fallback: use code_interpreter skill
+    skill = SKILL_REGISTRY.get("code_interpreter")
+    if skill:
+        result = await skill.run(code=code)
+        return result.output if result.success else f"Erreur d'exécution:\n{result.error}"
+    return "code_interpreter skill non disponible."
 
 discover_skills()
 
@@ -94,6 +132,18 @@ class ChatAgent(BaseAgent):
     )
 
     async def run(self, query: str, context: AgentContext = None) -> str:
+        global _pending_code, _pending_file
+
+        # Execution confirmation — user said yes to running pending code
+        if _pending_code and re.match(
+            r"^(?:oui|yes|ouais|yep|exécute[- ]?le|run\s+it|lance[- ]?le|vas[- ]?y|go|ok|sure|execute|exécute|lancer)\s*[!.,]?\s*$",
+            query.strip(), re.I
+        ):
+            code, fpath = _pending_code, _pending_file
+            _pending_code = None
+            _pending_file = None
+            return await _run_code(code, fpath)
+
         # Bypass LLM — math expressions
         expr = _extract_math_expr(query)
         if expr:
@@ -127,14 +177,61 @@ class CoderAgent(BaseAgent):
         "You are Seraphim in coder mode. You are an expert software engineer. "
         "When writing code, prefer clarity over cleverness. "
         "Always explain your reasoning briefly. Use modern best practices. "
+        "ALWAYS format your response like this:\n"
+        "FILENAME: <suggested_filename.py>\n"
+        "```python\n<code here>\n```\n"
+        "<brief explanation>\n"
         + _IDENTITY_BLOCK
     )
 
     async def run(self, query: str, context: AgentContext = None) -> str:
+        global _pending_code, _pending_file
+
         ctx = self.build_context(query, context)
         response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
-        return response
+
+        # Extract filename suggestion from LLM response
+        filename_m = re.search(r"FILENAME:\s*([\w\-\.]+\.py)", response)
+        timestamp = datetime.now().strftime("%H%M%S")
+        filename = filename_m.group(1) if filename_m else f"seraphim_{timestamp}.py"
+
+        # Extract code block
+        code_m = re.search(r"```python\n(.*?)\n```", response, re.DOTALL)
+        if not code_m:
+            code_m = re.search(r"```\n(.*?)\n```", response, re.DOTALL)
+
+        if not code_m:
+            # No code block found — return plain response
+            return response
+
+        code = code_m.group(1).strip()
+        _pending_code = code
+
+        # Write to ~/seraphim_workspace/
+        workspace = Path.home() / "seraphim_workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        file_path = workspace / filename
+        file_path.write_text(code, encoding="utf-8")
+        _pending_file = str(file_path)
+
+        # Open file in VS Code
+        ide_opened = False
+        try:
+            subprocess.Popen(f'code "{file_path}"', shell=True)
+            ide_opened = True
+        except Exception:
+            pass
+
+        # Strip FILENAME: line from response for clean output
+        clean = re.sub(r"^FILENAME:.*\n?", "", response, flags=re.MULTILINE).strip()
+
+        status_lines = [f"\n\n---", f"📁 `{filename}` → `{workspace}`"]
+        if ide_opened:
+            status_lines.append("🖥️  VS Code ouvert avec le fichier.")
+        status_lines.append("\n**Voulez-vous que j'exécute ce code ?** (répondez 'oui' ou 'non')")
+
+        return clean + "\n".join(status_lines)
 
 
 class ResearcherAgent(BaseAgent):
@@ -187,6 +284,18 @@ class ReActAgent(BaseAgent):
         )
 
     async def run(self, query: str, context: AgentContext | None = None) -> str:
+        global _pending_code, _pending_file
+
+        # Execution confirmation — user confirmed running pending code
+        if _pending_code and re.match(
+            r"^(?:oui|yes|ouais|yep|exécute[- ]?le|run\s+it|lance[- ]?le|vas[- ]?y|go|ok|sure|execute|exécute|lancer)\s*[!.,]?\s*$",
+            query.strip(), re.I
+        ):
+            code, fpath = _pending_code, _pending_file
+            _pending_code = None
+            _pending_file = None
+            return await _run_code(code, fpath)
+
         # ── Détection directe — bypass LLM total ────────────────────────────
         expr = _extract_math_expr(query)
         if expr:

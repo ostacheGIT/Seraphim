@@ -1,6 +1,8 @@
+import os
 import re
 import subprocess
 import sys
+import tempfile
 
 from seraphim.skills.base import BaseSkill, SkillResult
 
@@ -47,15 +49,23 @@ class CodeInterpreterSkill(BaseSkill):
         danger = _check_dangerous(code)
         if danger:
             return SkillResult(success=False, output="", error=danger)
+
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(code)
+                tmp_path = f.name
+
             proc = subprocess.run(
-                [sys.executable, "-I", "-c", code],
+                [sys.executable, tmp_path],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
             )
-            stdout = proc.stdout[:_MAX_OUTPUT]
-            stderr = proc.stderr[:_MAX_OUTPUT]
+            stdout = (proc.stdout or "")[:_MAX_OUTPUT]
+            stderr = (proc.stderr or "")[:_MAX_OUTPUT]
             output = stdout
             if stderr:
                 output += f"\n--- stderr ---\n{stderr}"
@@ -71,3 +81,9 @@ class CodeInterpreterSkill(BaseSkill):
             )
         except Exception as e:
             return SkillResult(success=False, output="", error=str(e))
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
