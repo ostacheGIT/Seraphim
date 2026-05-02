@@ -284,6 +284,10 @@ app.add_typer(memory_app, name="memory")
 from seraphim.monitor.monitor_cmd import app as monitor_app
 app.add_typer(monitor_app, name="monitor")
 
+# ── Morning digest ─────────────────────────────────────────────────────────────
+from seraphim.digest.digest_cmd import app as digest_app
+app.add_typer(digest_app, name="digest")
+
 
 if __name__ == "__main__":
     app()

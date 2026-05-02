@@ -1,0 +1,205 @@
+"""morning_digest builder — weather + news + monitor summary + LLM synthesis."""
+
+from __future__ import annotations
+
+import json
+import time
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+_CONFIG_PATH = Path.home() / ".seraphim" / "digest.json"
+
+_DEFAULT_CONFIG: dict[str, Any] = {
+    "city": "Paris",
+    "topics": ["tech", "AI", "crypto", "world news"],
+    "news_per_topic": 3,
+    "language": "fr",
+    "save_dir": str(Path.home() / ".seraphim" / "digests"),
+}
+
+
+def load_config() -> dict[str, Any]:
+    if _CONFIG_PATH.exists():
+        try:
+            return {**_DEFAULT_CONFIG, **json.loads(_CONFIG_PATH.read_text("utf-8"))}
+        except Exception:
+            pass
+    return _DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg: dict[str, Any]) -> None:
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), "utf-8")
+
+
+@dataclass
+class DigestSection:
+    title: str
+    content: str
+    error: str = ""
+
+
+@dataclass
+class Digest:
+    date: str
+    sections: list[DigestSection] = field(default_factory=list)
+    summary: str = ""
+
+    def to_markdown(self) -> str:
+        lines = [f"# Morning Digest — {self.date}\n"]
+        for s in self.sections:
+            lines.append(f"## {s.title}")
+            if s.error:
+                lines.append(f"*Error: {s.error}*")
+            else:
+                lines.append(s.content)
+            lines.append("")
+        if self.summary:
+            lines.append("## Summary")
+            lines.append(self.summary)
+        return "\n".join(lines)
+
+
+async def _get_weather(city: str) -> DigestSection:
+    url = f"https://wttr.in/{urllib.request.quote(city)}?format=j1"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/7.68.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read())
+
+        cur = data["current_condition"][0]
+        desc = cur["weatherDesc"][0]["value"]
+        temp_c = cur["temp_C"]
+        feels = cur["FeelsLikeC"]
+        humidity = cur["humidity"]
+        wind = cur["windspeedKmph"]
+
+        today = data["weather"][0]
+        max_c = today["maxtempC"]
+        min_c = today["mintempC"]
+
+        content = (
+            f"{desc}, {temp_c}°C (feels {feels}°C)\n"
+            f"Min/Max: {min_c}°C / {max_c}°C\n"
+            f"Humidity: {humidity}%  Wind: {wind} km/h"
+        )
+        return DigestSection(title=f"Weather — {city}", content=content)
+    except Exception as e:
+        return DigestSection(title=f"Weather — {city}", content="", error=str(e))
+
+
+async def _get_news(topics: list[str], per_topic: int = 3) -> list[DigestSection]:
+    sections: list[DigestSection] = []
+    try:
+        from ddgs import DDGS
+        for topic in topics:
+            try:
+                query = f"{topic} news today"
+                with DDGS() as ddgs:
+                    results = list(ddgs.news(query, max_results=per_topic))
+                if not results:
+                    results = list(DDGS().text(query, max_results=per_topic))
+
+                lines = []
+                for r in results:
+                    title = r.get("title") or r.get("title", "")
+                    body = r.get("body") or r.get("excerpt", "")
+                    url = r.get("url") or r.get("href", "")
+                    lines.append(f"• **{title}**")
+                    if body:
+                        lines.append(f"  {body[:120]}")
+                    if url:
+                        lines.append(f"  {url}")
+                sections.append(DigestSection(title=f"News — {topic.title()}", content="\n".join(lines)))
+            except Exception as e:
+                sections.append(DigestSection(title=f"News — {topic.title()}", content="", error=str(e)))
+    except ImportError:
+        sections.append(DigestSection(title="News", content="", error="ddgs not installed"))
+    return sections
+
+
+async def _get_monitor_summary() -> DigestSection:
+    try:
+        from seraphim.monitor.store import init_db, list_monitors
+        await init_db()
+        monitors = await list_monitors()
+        if not monitors:
+            return DigestSection(title="Monitors", content="No monitors configured.")
+
+        lines = []
+        for m in monitors:
+            status = "on" if m["enabled"] else "off"
+            last = "never"
+            if m["last_check"]:
+                delta = int(time.time() - m["last_check"])
+                last = f"{delta // 60}m ago" if delta < 3600 else f"{delta // 3600}h ago"
+            triggered = m["triggered_count"]
+            lines.append(
+                f"• **{m['name']}** [{status}] — checked {last}, triggered {triggered}x"
+            )
+            if m["last_result"] and triggered > 0:
+                lines.append(f"  Last: {m['last_result'][:80]}")
+
+        return DigestSection(title="Monitors", content="\n".join(lines))
+    except Exception as e:
+        return DigestSection(title="Monitors", content="", error=str(e))
+
+
+async def _llm_summary(digest: Digest, language: str = "fr") -> str:
+    try:
+        from seraphim.agents.base import ReActAgent
+        from seraphim.agents.core import AgentContext
+
+        lang_instruction = "Respond in French." if language == "fr" else "Respond in English."
+        content_parts = []
+        for s in digest.sections:
+            if s.content and not s.error:
+                content_parts.append(f"### {s.title}\n{s.content}")
+
+        if not content_parts:
+            return ""
+
+        combined = "\n\n".join(content_parts)[:3000]
+        agent = ReActAgent()
+        ctx = AgentContext()
+        ctx.add_system(
+            f"You are a personal morning briefing assistant. {lang_instruction} "
+            "Be concise and highlight what matters most. 3-5 sentences max."
+        )
+        prompt = (
+            f"Here is today's digest data:\n\n{combined}\n\n"
+            "Write a short morning briefing paragraph highlighting the key points."
+        )
+        result = await agent.run(prompt, ctx)
+        return result.strip()
+    except Exception:
+        return ""
+
+
+async def build_digest(cfg: dict[str, Any] | None = None) -> Digest:
+    if cfg is None:
+        cfg = load_config()
+
+    date_str = datetime.now().strftime("%A %d %B %Y — %H:%M")
+    digest = Digest(date=date_str)
+
+    # Weather
+    weather = await _get_weather(cfg["city"])
+    digest.sections.append(weather)
+
+    # News per topic
+    news_sections = await _get_news(cfg["topics"], cfg["news_per_topic"])
+    digest.sections.extend(news_sections)
+
+    # Monitor status
+    monitor_section = await _get_monitor_summary()
+    digest.sections.append(monitor_section)
+
+    # LLM synthesis
+    if not cfg.get("_skip_summary"):
+        digest.summary = await _llm_summary(digest, cfg.get("language", "fr"))
+
+    return digest

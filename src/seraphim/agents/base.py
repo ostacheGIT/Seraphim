@@ -111,6 +111,127 @@ DIRECT_PATTERNS = [
 ]
 
 
+_DIGEST_RE = re.compile(
+    r"\b(?:"
+    r"digest|briefing|morning[- ]brief|"
+    r"qu(?:'|e\s+)est[- ]ce\s+qui\s+se\s+passe(?:\s+dans\s+le\s+monde)?|"
+    r"quoi\s+de\s+neuf(?:\s+dans\s+le\s+monde)?|"
+    r"(?:les\s+)?(?:nouvelles|actualités|news)\s+du\s+(?:jour|matin|monde)|"
+    r"r[eé]sum[eé]\s+(?:du\s+jour|de\s+la\s+journ[eé]e|du\s+matin)|"
+    r"(?:lance|affiche|donne[- ]?moi|montre)[- ]?(?:moi\s+)?(?:le\s+)?(?:digest|brief|r[eé]sum[eé])|"
+    r"what'?s\s+(?:happening|new)\s+(?:in\s+the\s+world|today)"
+    r")\b",
+    re.I,
+)
+
+_SCHEDULE_DIGEST_RE = re.compile(
+    r"(?:programme|planifie|schedule|mets?\s+en\s+place|configure)"
+    r".*?(?:digest|briefing|morning[- ]brief)"
+    r".*?(?:à|a|at|pour|for)\s+(\d{1,2})[h:](\d{0,2})",
+    re.I,
+)
+
+_CAPABILITIES_RE = re.compile(
+    r"(?:^/skills?\s*$)"
+    r"|\b(?:"
+    r"(?:qu(?:e\s+)?(?:peux|sais)[- ]?tu\s+faire|what\s+can\s+you\s+do)|"
+    r"(?:liste(?:r)?|montre(?:r)?|affiche(?:r)?|show|list)\s+(?:(?:tes|tos|your|les|all)\s+)?(?:skills?|capacit[eé]s?|fonctionnalit[eé]s?|outils?|tools?|aptitudes?|pouvoirs?|capabilities)|"
+    r"(?:quelles?\s+sont\s+(?:tes|vos|your)\s+(?:skills?|capacit[eé]s?|fonctionnalit[eé]s?|outils?|capabilities))|"
+    r"(?:aide|help|commandes?|commands?)\s*$|"
+    r"(?:tu\s+(?:peux|sais)\s+faire\s+quoi|what\s+do\s+you\s+(?:do|know))"
+    r")\b",
+    re.I,
+)
+
+_SKILL_CATEGORIES: dict[str, list[str]] = {
+    "Web & Browser":  ["web_search", "browser_search", "browser_navigate", "browser_list", "http_request"],
+    "System":         ["open_app", "set_volume", "set_brightness", "system_control", "list_files", "read_file", "write_file", "shell"],
+    "Intelligence":   ["think", "calculator", "code_interpreter", "repl"],
+    "Information":    ["morning_digest"],
+    "Memory":         ["memory_store", "memory_search", "memory_recall"],
+    "Monitoring":     ["monitor_add", "monitor_list", "monitor_run"],
+}
+
+
+def _format_capabilities() -> str:
+    from seraphim.skills.registry import SKILL_REGISTRY
+    if not SKILL_REGISTRY:
+        from seraphim.skills.registry import discover_skills
+        discover_skills()
+
+    all_skills = dict(SKILL_REGISTRY)
+    categorized: set[str] = set()
+    lines = ["# Seraphim — Capacités\n"]
+
+    # ── Built-in skills ───────────────────────────────────────────────────────
+    lines.append("## Skills natifs\n")
+    for category, names in _SKILL_CATEGORIES.items():
+        present = [n for n in names if n in all_skills]
+        if not present:
+            continue
+        lines.append(f"### {category}")
+        lines.append("| Skill | Description |")
+        lines.append("|-------|-------------|")
+        for n in present:
+            desc = all_skills[n].description[:80].replace("|", "\\|")
+            lines.append(f"| `{n}` | {desc} |")
+            categorized.add(n)
+        lines.append("")
+
+    other = [n for n in sorted(all_skills) if n not in categorized]
+    if other:
+        lines.append("### Autres natifs")
+        lines.append("| Skill | Description |")
+        lines.append("|-------|-------------|")
+        for n in other:
+            desc = all_skills[n].description[:80].replace("|", "\\|")
+            lines.append(f"| `{n}` | {desc} |")
+        lines.append("")
+
+    # ── Catalog skills (openclaw / hermes / skillssh / …) ────────────────────
+    try:
+        from seraphim.skills.catalog import _load_catalog
+        catalog = _load_catalog()
+        if catalog:
+            from collections import defaultdict
+            by_source: dict[str, list] = defaultdict(list)
+            for entry in catalog:
+                by_source[entry.get("source", "?")].append(entry)
+
+            lines.append("## Skills du catalogue externe\n")
+            lines.append("| Source | Nombre | Exemples |")
+            lines.append("|--------|--------|---------|")
+            for source, entries in sorted(by_source.items()):
+                examples = ", ".join(
+                    f"`{e['name']}`" for e in entries[:4]
+                )
+                lines.append(f"| {source} | {len(entries)} | {examples}… |")
+            lines.append("")
+            lines.append(
+                f"> **{len(catalog)} skills** au total dans le catalogue. "
+                "Cherche avec : `seraphim skill search <mot-clé>`"
+            )
+            lines.append("")
+    except Exception:
+        pass
+
+    total_native = len(all_skills)
+    try:
+        from seraphim.skills.catalog import get_catalog_size
+        total_catalog = get_catalog_size()
+    except Exception:
+        total_catalog = 0
+
+    lines.append(f"**Total : {total_native} natifs + {total_catalog} catalogue = {total_native + total_catalog} skills.**")
+    lines.append("\nCommandes utiles :")
+    lines.append("- `seraphim ask \"...\"` — poser une question")
+    lines.append("- `seraphim digest run` — morning digest")
+    lines.append("- `seraphim monitor add <nom> <condition>` — moniteur continu")
+    lines.append("- `seraphim skill search <mot-clé>` — chercher dans le catalogue")
+    lines.append("- `seraphim skill sync-all` — mettre à jour le catalogue")
+    return "\n".join(lines)
+
+
 _IDENTITY_BLOCK = (
     "\n\n=== IDENTITY (ABSOLUTE, NON-NEGOTIABLE) ===\n"
     "Your name is Seraphim. You are a personal AI assistant running on this user's local machine.\n"
@@ -154,6 +275,27 @@ class ChatAgent(BaseAgent):
                 if result.success:
                     return result.output
                 # fall through to LLM if expression was invalid
+
+        # Bypass LLM — capabilities table
+        if _CAPABILITIES_RE.search(query.strip()):
+            return _format_capabilities()
+
+        # Bypass LLM — schedule digest
+        sm = _SCHEDULE_DIGEST_RE.search(query)
+        if sm:
+            hour = sm.group(1).zfill(2)
+            minute = (sm.group(2) or "00").zfill(2)
+            time_str = f"{hour}:{minute}"
+            import subprocess as _sp, sys as _sys
+            _sp.run([_sys.executable, "-m", "seraphim.cli", "digest", "schedule", "--time", time_str])
+            return f"Morning digest scheduled daily at {time_str}. Run `seraphim digest schedule --remove` to cancel."
+
+        # Bypass LLM — morning digest
+        if _DIGEST_RE.search(query):
+            skill = SKILL_REGISTRY.get("morning_digest")
+            if skill:
+                result = await skill.run(no_summary=True)
+                return result.output if result.success else f"Digest error: {result.error}"
 
         # Bypass LLM — system commands
         for pattern, builder in DIRECT_PATTERNS:
@@ -347,6 +489,27 @@ class ReActAgent(BaseAgent):
                     context,
                 )
                 return await self._chat(ctx.messages)
+
+        # ── Capabilities table ───────────────────────────────────────────────
+        if _CAPABILITIES_RE.search(query.strip()):
+            return _format_capabilities()
+
+        # ── Schedule digest ──────────────────────────────────────────────────
+        sm = _SCHEDULE_DIGEST_RE.search(query)
+        if sm:
+            hour = sm.group(1).zfill(2)
+            minute = (sm.group(2) or "00").zfill(2)
+            time_str = f"{hour}:{minute}"
+            import subprocess as _sp, sys as _sys
+            _sp.run([_sys.executable, "-m", "seraphim.cli", "digest", "schedule", "--time", time_str])
+            return f"Morning digest scheduled daily at {time_str}."
+
+        # ── Morning digest — bypass LLM ──────────────────────────────────────
+        if _DIGEST_RE.search(query):
+            skill = SKILL_REGISTRY.get("morning_digest")
+            if skill:
+                result = await skill.run(no_summary=True)
+                return result.output if result.success else f"Digest error: {result.error}"
 
         # Skip web_search DIRECT_PATTERN if browser keyword present
         _skip_web_direct = bool(_BROWSER_KW.search(query))
