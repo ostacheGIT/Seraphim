@@ -62,7 +62,8 @@ def listen_command(
     async def _respond(query: str):
         from seraphim.agents.base import get_agent
         from seraphim.agents.core import AgentContext
-        from seraphim.engine.ollama import engine as eng
+        from seraphim.engine import get_engine
+        eng = get_engine()
         from seraphim.memory.store import init_db, load_history, save_message
         from seraphim.voice.speaker import speak_async, synthesize_to_bytes
         from concurrent.futures import ThreadPoolExecutor

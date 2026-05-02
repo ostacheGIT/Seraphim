@@ -110,6 +110,26 @@ DIRECT_PATTERNS = [
      lambda m: ("read_file", {"path": m.group(1).strip()})),
 ]
 
+_SCREEN_OCR_RE = re.compile(
+    r"\b(?:"
+    r"(?:lis|lire|extrai[st]?|read|extract)\s+(?:le\s+)?texte\s+(?:(?:de|sur|à)\s+)?(?:l[' ])?écran|"
+    r"(?:qu[' e]+est[- ]ce\s+(?:qu[' e]+il\s+y\s+a|qui\s+(?:est\s+)?(?:écrit|affiché))\s+(?:sur\s+)?(?:l[' ])?écran)|"
+    r"(?:fais?\s+(?:une?\s+)?)?(?:capture|screenshot|screen[- ]shot)|"
+    r"(?:ocr[\s:]+(?:(?:l[' ])?écran|screen))|"
+    r"(?:screen\s+(?:ocr|capture|read))"
+    r")\b",
+    re.I,
+)
+
+_SCREEN_DESCRIBE_RE = re.compile(
+    r"\b(?:"
+    r"(?:(?:décri[st]?|describe|dis[- ]?moi\s+ce\s+(?:que\s+tu\s+vois|qu(?:'|e\s+)il\s+y\s+a))\s+(?:(?:sur\s+)?(?:l[' ])?écran|(?:my\s+)?screen))|"
+    r"(?:(?:regarde|look\s+at)\s+(?:(?:mon\s+)?écran|my\s+screen))|"
+    r"(?:qu(?:'|e\s+)est[- ]ce\s+que\s+tu\s+vois)"
+    r")\b",
+    re.I,
+)
+
 
 _DIGEST_RE = re.compile(
     r"\b(?:"
@@ -279,6 +299,27 @@ class ChatAgent(BaseAgent):
         # Bypass LLM — capabilities table
         if _CAPABILITIES_RE.search(query.strip()):
             return _format_capabilities()
+
+        # Bypass LLM — screen describe (vision LLM, check before OCR)
+        if _SCREEN_DESCRIBE_RE.search(query):
+            skill = SKILL_REGISTRY.get("screen_describe")
+            if skill:
+                result = await skill.run(prompt=query)
+                return result.output if result.success else f"Screen describe error: {result.error}"
+
+        # Bypass LLM — screen OCR / capture
+        if _SCREEN_OCR_RE.search(query):
+            cap_only = bool(re.search(r"\b(?:capture|screenshot|screen[- ]shot)\b", query, re.I))
+            if cap_only:
+                skill = SKILL_REGISTRY.get("screen_capture")
+                if skill:
+                    result = await skill.run()
+                    return f"Screenshot saved: {result.output}" if result.success else f"Capture error: {result.error}"
+            else:
+                skill = SKILL_REGISTRY.get("screen_ocr")
+                if skill:
+                    result = await skill.run()
+                    return result.output if result.success else f"OCR error: {result.error}"
 
         # Bypass LLM — schedule digest
         sm = _SCHEDULE_DIGEST_RE.search(query)
@@ -493,6 +534,27 @@ class ReActAgent(BaseAgent):
         # ── Capabilities table ───────────────────────────────────────────────
         if _CAPABILITIES_RE.search(query.strip()):
             return _format_capabilities()
+
+        # ── Screen describe ──────────────────────────────────────────────────
+        if _SCREEN_DESCRIBE_RE.search(query):
+            skill = SKILL_REGISTRY.get("screen_describe")
+            if skill:
+                result = await skill.run(prompt=query)
+                return result.output if result.success else f"Screen describe error: {result.error}"
+
+        # ── Screen OCR / capture ─────────────────────────────────────────────
+        if _SCREEN_OCR_RE.search(query):
+            cap_only = bool(re.search(r"\b(?:capture|screenshot|screen[- ]shot)\b", query, re.I))
+            if cap_only:
+                skill = SKILL_REGISTRY.get("screen_capture")
+                if skill:
+                    result = await skill.run()
+                    return f"Screenshot saved: {result.output}" if result.success else f"Capture error: {result.error}"
+            else:
+                skill = SKILL_REGISTRY.get("screen_ocr")
+                if skill:
+                    result = await skill.run()
+                    return result.output if result.success else f"OCR error: {result.error}"
 
         # ── Schedule digest ──────────────────────────────────────────────────
         sm = _SCHEDULE_DIGEST_RE.search(query)
