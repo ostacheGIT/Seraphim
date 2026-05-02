@@ -301,6 +301,98 @@ body:has(.panel-resize-handle.dragging) {
     color: var(--text);
 }
 
+/* ─── Markdown body ─────────────────────────────────────────── */
+.md-body p {
+    margin: 0 0 0.55em;
+}
+.md-body p:last-child { margin-bottom: 0; }
+
+.md-body h1, .md-body h2, .md-body h3,
+.md-body h4, .md-body h5, .md-body h6 {
+    color: #e2e8f0;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    margin: 0.8em 0 0.3em;
+    line-height: 1.3;
+}
+.md-body h1 { font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; }
+.md-body h2 { font-size: 13.5px; }
+.md-body h3 { font-size: 12.5px; color: var(--accent); }
+
+.md-body strong { color: #f1f5f9; font-weight: 600; }
+.md-body em    { color: #cbd5e1; font-style: italic; }
+
+.md-body ul, .md-body ol {
+    padding-left: 1.4em;
+    margin: 0.3em 0 0.55em;
+}
+.md-body li { margin: 0.15em 0; }
+.md-body li::marker { color: var(--accent); }
+
+.md-body blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 0.5em 0;
+    padding: 4px 10px;
+    color: rgba(210,210,210,0.7);
+    background: rgba(167,139,250,0.06);
+    border-radius: 0 4px 4px 0;
+}
+
+.md-body a {
+    color: #7dd3fc;
+    text-decoration: none;
+}
+.md-body a:hover { text-decoration: underline; }
+
+.md-body hr {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    margin: 0.6em 0;
+}
+
+/* Inline code */
+.md-inline-code {
+    background: rgba(167,139,250,0.12);
+    border: 1px solid rgba(167,139,250,0.22);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 10.5px;
+    font-family: 'Share Tech Mono', 'Fira Code', monospace;
+    color: #c4b5fd;
+    letter-spacing: 0.2px;
+}
+
+/* Tables */
+.md-table-wrap {
+    overflow-x: auto;
+    margin: 0.5em 0;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+}
+.md-table th {
+    background: rgba(167,139,250,0.12);
+    color: #c4b5fd;
+    font-weight: 600;
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid rgba(167,139,250,0.25);
+    white-space: nowrap;
+}
+.md-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    color: #e2e8f0;
+    vertical-align: top;
+}
+.md-table tr:last-child td { border-bottom: none; }
+.md-table tr:hover td { background: rgba(255,255,255,0.03); }
+
 .thinking-dots {
     display: flex;
     gap: 5px;
@@ -558,6 +650,14 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
 }
 
 .code-block-body {
+    overflow-x: auto;
+}
+
+/* SyntaxHighlighter renders its own <pre> — ensure it scrolls and fits */
+.code-block > pre,
+.code-block > pre > code {
+    margin: 0 !important;
+    background: transparent !important;
     overflow-x: auto;
 }
 
