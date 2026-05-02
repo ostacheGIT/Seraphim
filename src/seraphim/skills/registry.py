@@ -1,23 +1,37 @@
 import importlib
+import logging
 import pkgutil
 from seraphim.skills.base import BaseSkill
+
+logger = logging.getLogger(__name__)
 
 SKILL_REGISTRY: dict[str, BaseSkill] = {}
 
 def discover_skills():
     """Découvre et enregistre tous les skills automatiquement"""
     import seraphim.skills as skills_pkg
+    seen_classes: set[type] = set()
     for _, module_name, _ in pkgutil.walk_packages(
             skills_pkg.__path__, prefix="seraphim.skills."
     ):
         module = importlib.import_module(module_name)
         for attr in dir(module):
             obj = getattr(module, attr)
-            if (isinstance(obj, type) and
-                    issubclass(obj, BaseSkill) and
-                    obj is not BaseSkill):
-                instance = obj()
-                SKILL_REGISTRY[instance.name] = instance
+            if not (isinstance(obj, type) and issubclass(obj, BaseSkill) and obj is not BaseSkill):
+                continue
+            if obj in seen_classes:
+                continue
+            seen_classes.add(obj)
+            instance = obj()
+            existing = SKILL_REGISTRY.get(instance.name)
+            if existing is not None:
+                logger.warning(
+                    "Skill name collision: '%s' defined in both %s and %s — keeping last",
+                    instance.name,
+                    type(existing).__module__,
+                    type(instance).__module__,
+                )
+            SKILL_REGISTRY[instance.name] = instance
 
 def get_skill(name: str) -> BaseSkill:
     return SKILL_REGISTRY[name]

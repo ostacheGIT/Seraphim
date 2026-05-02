@@ -1,10 +1,13 @@
 """Agents built-in : chat, coder, researcher, react."""
 
 import json
+import logging
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from seraphim.agents.core import AgentContext, BaseAgent
 from seraphim.skills.registry import discover_skills, get_all_tools, get_skill, SKILL_REGISTRY
 
@@ -601,7 +604,7 @@ class ReActAgent(BaseAgent):
                         msg["content"] += skill_block
                         break
         except Exception:
-            pass  # catalog absent ou erreur → continue sans skills externes
+            logger.warning("External skill catalog unavailable", exc_info=True)
 
         # ── ReAct loop standard pour tout le reste ───────────────────────────
         for _ in range(8):
@@ -637,8 +640,6 @@ class ReActAgent(BaseAgent):
 
                 # ── Built-in skill ────────────────────────────────────────────
                 else:
-                    if "path" in args:
-                        args["path"] = args["path"].replace("/", "\\")
                     try:
                         skill = SKILL_REGISTRY[skill_name]
                         result = await skill.run(**args)
@@ -901,9 +902,6 @@ class SkillAgent(BaseAgent):
                     args = json.loads(raw)
                 except json.JSONDecodeError:
                     pass
-
-            if "path" in args:
-                args["path"] = args["path"].replace("/", "\\")
 
             # Enforce 30s shell timeout
             if skill_name == "shell" and "timeout" not in args:
