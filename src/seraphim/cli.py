@@ -280,6 +280,10 @@ app.add_typer(skill_app, name="skill")
 from seraphim.memory.memory_cmd import app as memory_app
 app.add_typer(memory_app, name="memory")
 
+# ── Monitoring continu ─────────────────────────────────────────────────────────
+from seraphim.monitor.monitor_cmd import app as monitor_app
+app.add_typer(monitor_app, name="monitor")
+
 
 if __name__ == "__main__":
     app()
