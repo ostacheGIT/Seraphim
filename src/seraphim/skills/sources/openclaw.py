@@ -1,8 +1,7 @@
-"""OpenClawResolver — résout les skills depuis l'index de skills OpenClaw.
+"""OpenClawResolver — résout les skills depuis openclaw/openclaw.
 
-Structure :
-    skills/<owner>/<skill-name>/SKILL.md
-    skills/<owner>/<skill-name>/_meta.json  (sidecar optionnel)
+Structure réelle du repo openclaw/openclaw :
+    skills/<skill-name>/SKILL.md   (structure plate, pas d'owner)
 """
 
 from __future__ import annotations
@@ -19,11 +18,12 @@ from seraphim.skills.sources.base import ResolvedSkill, SourceResolver
 
 LOGGER = logging.getLogger(__name__)
 
-OPENCLAW_REPO_URL = "https://github.com/openclaw/skills.git"
+# Repo principal openclaw — les skills sont dans le sous-dossier skills/
+OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git"
 
 
 class OpenClawResolver(SourceResolver):
-    """Résout les skills depuis l'index de skills OpenClaw."""
+    """Résout les skills depuis le repo openclaw/openclaw (skills/ plat)."""
 
     name = "openclaw"
 
@@ -44,11 +44,12 @@ class OpenClawResolver(SourceResolver):
         else:
             self._cache_root.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(
-                ["git", "clone", OPENCLAW_REPO_URL, str(self._cache_root)],
+                ["git", "clone", "--depth=1", OPENCLAW_REPO_URL, str(self._cache_root)],
                 check=True,
             )
 
     def list_skills(self) -> List[ResolvedSkill]:
+        """skills/<skill-name>/SKILL.md — structure plate."""
         skills_root = self._cache_root / "skills"
         if not skills_root.exists():
             return []
@@ -56,31 +57,25 @@ class OpenClawResolver(SourceResolver):
         results: List[ResolvedSkill] = []
         commit = self._read_commit()
 
-        for owner_dir in sorted(skills_root.iterdir()):
-            if not owner_dir.is_dir():
+        for skill_dir in sorted(skills_root.iterdir()):
+            if not skill_dir.is_dir():
                 continue
-            for skill_dir in sorted(owner_dir.iterdir()):
-                if not skill_dir.is_dir():
-                    continue
-                skill_md = skill_dir / "SKILL.md"
-                if not skill_md.exists():
-                    continue
-
-                name, description = self._read_preview(
-                    skill_md, default_name=skill_dir.name
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            name, description = self._read_preview(skill_md, default_name=skill_dir.name)
+            sidecar = self._read_sidecar(skill_dir / "_meta.json")
+            results.append(
+                ResolvedSkill(
+                    name=name,
+                    source=self.name,
+                    path=skill_dir,
+                    category="openclaw",
+                    description=description,
+                    commit=commit,
+                    sidecar_data=sidecar,
                 )
-                sidecar = self._read_sidecar(skill_dir / "_meta.json")
-                results.append(
-                    ResolvedSkill(
-                        name=name,
-                        source=self.name,
-                        path=skill_dir,
-                        category=owner_dir.name,
-                        description=description,
-                        commit=commit,
-                        sidecar_data=sidecar,
-                    )
-                )
+            )
 
         return results
 

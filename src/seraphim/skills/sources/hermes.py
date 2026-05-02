@@ -49,38 +49,37 @@ class HermesResolver(SourceResolver):
             )
 
     def list_skills(self) -> List[ResolvedSkill]:
-        """Parcourt skills/<category>/<skill>/SKILL.md."""
-        skills_root = self._cache_root / "skills"
-        if not skills_root.exists():
-            return []
-
+        """Parcourt skills/<category>/<skill>/SKILL.md + optional-skills/<category>/<skill>/SKILL.md."""
         results: List[ResolvedSkill] = []
         commit = self._read_commit()
 
-        for category_dir in sorted(skills_root.iterdir()):
-            if not category_dir.is_dir():
+        for subdir_name in ("skills", "optional-skills"):
+            skills_root = self._cache_root / subdir_name
+            if not skills_root.exists():
                 continue
-            category = category_dir.name
-            for skill_dir in sorted(category_dir.iterdir()):
-                if not skill_dir.is_dir():
+            for category_dir in sorted(skills_root.iterdir()):
+                if not category_dir.is_dir():
                     continue
-                skill_md = skill_dir / "SKILL.md"
-                if not skill_md.exists():
-                    continue
-
-                name, description = self._read_preview(
-                    skill_md, default_name=skill_dir.name
-                )
-                results.append(
-                    ResolvedSkill(
-                        name=name,
-                        source=self.name,
-                        path=skill_dir,
-                        category=category,
-                        description=description,
-                        commit=commit,
+                category = category_dir.name
+                for skill_dir in sorted(category_dir.iterdir()):
+                    if not skill_dir.is_dir():
+                        continue
+                    skill_md = skill_dir / "SKILL.md"
+                    if not skill_md.exists():
+                        continue
+                    name, description = self._read_preview(
+                        skill_md, default_name=skill_dir.name
                     )
-                )
+                    results.append(
+                        ResolvedSkill(
+                            name=name,
+                            source=self.name,
+                            path=skill_dir,
+                            category=category,
+                            description=description,
+                            commit=commit,
+                        )
+                    )
 
         return results
 

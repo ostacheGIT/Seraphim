@@ -88,7 +88,7 @@ def ask(
     async def _ask():
         from seraphim.agents.base import get_agent
         from seraphim.agents.core import AgentContext
-        from seraphim.agents.react import ReactAgent
+        from seraphim.agents.base import ReActAgent
         from seraphim.engine import get_engine
         from seraphim.memory.store import init_db, load_history, save_message
 
@@ -108,7 +108,7 @@ def ask(
 
         # Instancie l'agent
         if agent == "react":
-            ag = ReactAgent(engine_id=engine_id)
+            ag = ReActAgent(engine_id=engine_id)
         else:
             ag = get_agent(agent)
             if hasattr(ag, "engine_id"):

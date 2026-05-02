@@ -19,17 +19,19 @@ from rich.table import Table
 app = typer.Typer(name="skill", help="Gérer les skills externes Seraphim.")
 console = Console()
 
-_SOURCE_CHOICES = ["hermes", "openclaw", "github"]
+_SOURCE_CHOICES = ["hermes", "openclaw", "skillssh", "github"]
 
 
 def _make_resolver(source: str, github_url: Optional[str] = None):
     """Instancie le bon résolveur selon la source."""
-    from seraphim.skills.sources import HermesResolver, OpenClawResolver, GitHubResolver
+    from seraphim.skills.sources import HermesResolver, OpenClawResolver, GitHubResolver, SkillsShResolver
 
     if source == "hermes":
         return HermesResolver()
     if source == "openclaw":
         return OpenClawResolver()
+    if source == "skillssh":
+        return SkillsShResolver()
     if source == "github":
         if not github_url:
             console.print("[red]✗ --github-url requis pour la source 'github'[/red]")
@@ -123,6 +125,102 @@ def skill_search(
         table.add_row(s.name, s.category, desc)
 
     console.print(table)
+
+
+@app.command("build-index")
+def skill_build_index():
+    """Construit l'index de recherche des skills (requis après sync-all)."""
+    from seraphim.skills.catalog import build_catalog, get_catalog_size
+
+    counts: dict[str, int] = {}
+
+    def _cb(source: str, n: int):
+        counts[source] = n
+        console.print(f"  [dim]{source}:[/dim] {n} skills scannés")
+
+    console.print("[dim]Construction de l'index...[/dim]")
+    total = build_catalog(progress_callback=_cb)
+    console.print(
+        f"\n[bold green]✓ {total} skills indexés[/bold green] → "
+        f"[dim]~/.seraphim/skill-catalog.json[/dim]\n"
+        "Les skills sont maintenant disponibles automatiquement dans Seraphim."
+    )
+
+
+@app.command("sync-all")
+def skill_sync_all():
+    """Synchronise OpenClaw (~13 700 skills) et Hermes (~150 skills) en une commande."""
+    for source in ["openclaw", "hermes", "skillssh"]:
+        resolver = _make_resolver(source)
+        console.print(f"[dim]Sync {source}...[/dim]", end=" ")
+        try:
+            resolver.sync()
+            console.print(f"[green]✓[/green]  {resolver.cache_dir()}")
+        except Exception as exc:
+            console.print(f"[red]✗ {exc}[/red]")
+    # Auto-build index after sync
+    console.print("\n[dim]Construction de l'index de recherche...[/dim]")
+    try:
+        from seraphim.skills.catalog import build_catalog
+        total = build_catalog()
+        console.print(f"[green]✓[/green] Index : {total} skills indexés")
+    except Exception as exc:
+        console.print(f"[yellow]⚠ Index non construit : {exc}[/yellow]")
+
+    console.print(
+        "\n[bold green]✓ Prêt.[/bold green] "
+        "Seraphim utilise maintenant les skills automatiquement selon votre requête.\n"
+        "Recherche manuelle : [bold]seraphim skill search <terme> --source openclaw[/bold]"
+    )
+
+
+@app.command("install-all")
+def skill_install_all(
+        source: str = typer.Option("openclaw", "--source", "-s", help="Source : hermes | openclaw"),
+        force: bool = typer.Option(False, "--force", "-f", help="Écraser les skills déjà installés"),
+):
+    """Importe tous les skills d'une source dans ~/.seraphim/skills/ (peut être long)."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+    resolver = _make_resolver(source)
+    importer = _make_importer()
+
+    console.print(f"[dim]Chargement de la liste des skills depuis {source}...[/dim]")
+    try:
+        all_skills = resolver.list_skills()
+    except Exception as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        console.print(f"[dim]Sync d'abord : seraphim skill sync --source {source}[/dim]")
+        raise typer.Exit(1)
+
+    if not all_skills:
+        console.print(f"[yellow]Aucun skill dans {source}. Essayez : seraphim skill sync --source {source}[/yellow]")
+        raise typer.Exit(1)
+
+    ok = err = skip = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Import {source}…", total=len(all_skills))
+        for skill in all_skills:
+            result = importer.import_skill(skill, force=force)
+            if result.skipped:
+                skip += 1
+            elif result.success:
+                ok += 1
+            else:
+                err += 1
+            progress.advance(task)
+
+    console.print(
+        f"\n[green]✓ {ok} importés[/green]  "
+        f"[dim]{skip} ignorés (déjà installés)[/dim]  "
+        f"{'[red]' + str(err) + ' erreurs[/red]' if err else ''}"
+    )
 
 
 @app.command("import")

@@ -272,7 +272,8 @@ class ReActAgent(BaseAgent):
             "- calculator: evaluate math expressions safely. Args: {\"expression\": \"2**10 + sqrt(144)\"}\n"
             "- code_interpreter: run Python code in a subprocess. Args: {\"code\": \"print(1+1)\", \"timeout\": 15}\n"
             "- repl: persistent Python REPL (variables survive between calls). Args: {\"code\": \"x = 42\", \"reset\": false}\n"
-            "- http_request: make HTTP requests. Args: {\"url\": \"https://...\", \"method\": \"GET\"}\n\n"
+            "- http_request: make HTTP requests. Args: {\"url\": \"https://...\", \"method\": \"GET\"}\n"
+            "- shell: run any shell/CLI command. Args: {\"command\": \"agent-browser screenshot https://...\", \"timeout\": 60}\n\n"
             "IMPORTANT RULES:\n"
             "1. Always use forward slashes in paths, never backslashes.\n"
             "2. After receiving a RESULT, give your final answer using ONLY that result.\n"
@@ -320,13 +321,25 @@ class ReActAgent(BaseAgent):
                 except Exception as e:
                     return f"Erreur : {e}"
 
-        # ── ReAct loop standard pour tout le reste ───────────────────────────
+        # ── Injection dynamique des skills du catalogue ──────────────────────
         ctx = self.build_context(query, context)
+        try:
+            from seraphim.skills.catalog import search_skills, format_skill_catalog_block
+            relevant = search_skills(query, top_k=15)
+            if relevant:
+                skill_block = format_skill_catalog_block(relevant)
+                for msg in ctx.messages:
+                    if msg.get("role") == "system":
+                        msg["content"] += skill_block
+                        break
+        except Exception:
+            pass  # catalog absent ou erreur → continue sans skills externes
 
+        # ── ReAct loop standard pour tout le reste ───────────────────────────
         for _ in range(8):
             response = await self._chat(ctx.messages)
 
-            action_match = re.search(r"ACTION:\s*(\w+)", response)
+            action_match = re.search(r"ACTION:\s*([\w:.\-/]+)", response)
             args_match   = re.search(r"ARGS:\s*(\{.*?\})", response, re.DOTALL)
 
             if action_match:
@@ -339,15 +352,33 @@ class ReActAgent(BaseAgent):
                     except json.JSONDecodeError:
                         pass
 
-                if "path" in args:
-                    args["path"] = args["path"].replace("/", "\\")
+                # ── External skill (openclaw / hermes) ───────────────────────
+                if skill_name.startswith("skill:"):
+                    ext_name = skill_name[6:]
+                    try:
+                        ext_agent = SkillAgent(ext_name)
+                        sub_query = args.get("query", query)
+                        tool_output = await ext_agent.run(sub_query)
+                    except FileNotFoundError:
+                        tool_output = (
+                            f"Skill '{ext_name}' non trouvé dans le cache. "
+                            "Lance : seraphim skill sync-all"
+                        )
+                    except Exception as e:
+                        tool_output = f"Skill error ({ext_name}): {e}"
 
-                try:
-                    skill = SKILL_REGISTRY[skill_name]
-                    result = await skill.run(**args)
-                    tool_output = result.output if result.success else f"Error: {result.error}"
-                except Exception as e:
-                    tool_output = f"Skill error: {type(e).__name__}: {e}"
+                # ── Built-in skill ────────────────────────────────────────────
+                else:
+                    if "path" in args:
+                        args["path"] = args["path"].replace("/", "\\")
+                    try:
+                        skill = SKILL_REGISTRY[skill_name]
+                        result = await skill.run(**args)
+                        tool_output = result.output if result.success else f"Error: {result.error}"
+                    except KeyError:
+                        tool_output = f"Skill '{skill_name}' inconnu."
+                    except Exception as e:
+                        tool_output = f"Skill error: {type(e).__name__}: {e}"
 
                 ctx.messages.append({"role": "assistant", "content": response})
                 ctx.messages.append({
@@ -437,29 +468,195 @@ class BuiltinSkillAgent(BaseAgent):
 
 class SkillAgent(BaseAgent):
     name = "skill"
-    description = "Exécute un skill Hermes installé (YAML externe)"
+    description = "Exécute un skill externe (Hermes / OpenClaw / skills.sh)"
 
     def __init__(self, skill_name: str):
         super().__init__()
         self.skill_name = skill_name
-        self.system_prompt = self._load_skill_prompt()
+        self._raw_content = self._find_skill_md()
+        self._needs_shell = self._has_bash_tools(self._raw_content)
+        self.system_prompt = self._raw_content
 
-    def _load_skill_prompt(self) -> str:
+    # ── Recherche SKILL.md ────────────────────────────────────────────────────
+
+    def _find_skill_md(self) -> str:
+        name = self.skill_name
+
         skills_root = Path("~/.seraphim/skills").expanduser()
-        for skill_md in skills_root.rglob(f"{self.skill_name}/SKILL.md"):
+        for skill_md in skills_root.rglob(f"{name}/SKILL.md"):
             return skill_md.read_text(encoding="utf-8")
+
+        openclaw_skills = Path("~/.seraphim/skill-cache/openclaw/skills").expanduser()
+        if openclaw_skills.exists():
+            candidate = openclaw_skills / name / "SKILL.md"
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+
+        hermes_root = Path("~/.seraphim/skill-cache/hermes").expanduser()
+        for subdir in ("skills", "optional-skills"):
+            hermes_skills = hermes_root / subdir
+            if hermes_skills.exists():
+                for skill_md in hermes_skills.rglob(f"{name}/SKILL.md"):
+                    return skill_md.read_text(encoding="utf-8")
+
+        skillssh_root = Path("~/.seraphim/skill-cache/skillssh").expanduser()
+        for subdir in ("skills", "remote"):
+            candidate = skillssh_root / subdir / name / "SKILL.md"
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
+
         raise FileNotFoundError(
-            f"Skill '{self.skill_name}' non trouvé. "
-            f"Installez-le : seraphim skill import {self.skill_name}"
+            f"Skill '{name}' non trouvé. Lance : seraphim skill sync-all"
         )
 
+    # Compatibility alias used by legacy code
+    def _load_skill_prompt(self) -> str:
+        return self._find_skill_md()
+
+    # ── Détection bash ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _has_bash_tools(content: str) -> bool:
+        """True si le SKILL.md déclare allowed-tools avec Bash(...)."""
+        import yaml as _yaml
+        if not content.startswith("---"):
+            return False
+        rest = content[3:].lstrip("\n")
+        end = rest.find("\n---")
+        if end == -1:
+            return False
+        try:
+            fm = _yaml.safe_load(rest[:end])
+        except Exception:
+            return False
+        if not isinstance(fm, dict):
+            return False
+        allowed = str(fm.get("allowed-tools", ""))
+        return "Bash" in allowed or "bash" in allowed
+
+    # ── Exécution ─────────────────────────────────────────────────────────────
+
     async def run(self, query: str, context: AgentContext = None) -> str:
+        if self._needs_shell:
+            return await self._run_react(query, context)
+        # Mode simple : LLM lit le SKILL.md comme prompt système
         ctx = self.build_context(query, context)
         result = await self.engine.chat(ctx.messages)
         msgs = result.get("messages", [])
         response = msgs[-1].get("content", "") if msgs else ""
         ctx.add_assistant(response)
         return response
+
+    async def _run_react(self, query: str, context: AgentContext | None) -> str:
+        """ReAct loop avec shell + outils standard. Skill instructions en contexte."""
+        cwd = Path.cwd().as_posix()
+        skill_system = (
+            f"You are Seraphim executing the **{self.skill_name}** skill.\n\n"
+            "=== SKILL INSTRUCTIONS ===\n"
+            f"{self._raw_content}\n"
+            "=== END SKILL INSTRUCTIONS ===\n\n"
+            "## HOW TO USE TOOLS — MANDATORY FORMAT\n\n"
+            "To run a command you MUST write EXACTLY this (no markdown, no code blocks):\n\n"
+            "ACTION: shell\n"
+            'ARGS: {"command": "agent-browser screenshot https://google.com --output screenshot.png"}\n\n'
+            "WRONG (never do this):\n"
+            "```bash\nagent-browser ...\n```\n\n"
+            "RIGHT (always do this):\n"
+            "ACTION: shell\n"
+            'ARGS: {"command": "agent-browser screenshot https://google.com"}\n\n'
+            "Available tools:\n"
+            "- shell  → run CLI commands. ARGS: {\"command\": \"...\", \"timeout\": 60}\n"
+            f"- read_file  → read file. ARGS: {{\"path\": \"{cwd}/file\"}}\n"
+            "- write_file → write file. ARGS: {\"path\": \"...\", \"content\": \"...\"}\n"
+            "- web_search → search web. ARGS: {\"query\": \"...\"}\n"
+            "- think      → reason step by step. ARGS: {\"thought\": \"...\"}\n\n"
+            "RULES:\n"
+            "1. NEVER describe what to run — RUN IT with ACTION: shell.\n"
+            "2. One ACTION per response.\n"
+            "3. After tool RESULT, give a short human-readable summary.\n"
+            f"4. Working dir: {cwd}\n"
+        )
+
+        ctx = context or AgentContext()
+        ctx.add_system(skill_system)
+        ctx.add_user(query)
+
+        _MAX_ITERS = 6
+        _bash_runs = 0  # guard: stop if LLM keeps looping bash blocks
+
+        for step in range(_MAX_ITERS):
+            # Keep context small — system + user + last 6 messages
+            system_msgs = [m for m in ctx.messages if m.get("role") == "system"]
+            user_first  = [m for m in ctx.messages if m.get("role") == "user"][:1]
+            recent      = ctx.messages[-6:] if len(ctx.messages) > 8 else ctx.messages
+            trimmed     = system_msgs + user_first
+            for m in recent:
+                if m not in trimmed:
+                    trimmed.append(m)
+
+            result = await self.engine.chat(trimmed)
+            msgs = result.get("messages", [])
+            response = msgs[-1].get("content", "") if msgs else ""
+
+            action_match = re.search(r"ACTION:\s*([\w:.\-/]+)", response)
+            args_match   = re.search(r"ARGS:\s*(\{.*?\})", response, re.DOTALL)
+
+            if not action_match:
+                # Fallback: bash/shell code block → execute directly
+                bash_match = re.search(
+                    r"```(?:bash|sh|shell)\n(.*?)\n```",
+                    response, re.DOTALL
+                )
+                if bash_match and _bash_runs < 3:
+                    cmd = bash_match.group(1).strip()
+                    cmd = re.sub(r"^shell:\s*", "", cmd)
+                    shell_skill = SKILL_REGISTRY.get("shell")
+                    if shell_skill and cmd:
+                        _bash_runs += 1
+                        res = await shell_skill.run(command=cmd, timeout=30)
+                        tool_output = res.output if res.success else f"Error: {res.error}"
+                        ctx.messages.append({"role": "assistant", "content": response})
+                        ctx.messages.append({
+                            "role": "user",
+                            "content": f"Tool result (shell):\n{tool_output}\n\nGive a short final summary.",
+                        })
+                        continue
+                # No action, no bash → final answer
+                ctx.add_assistant(response)
+                return response
+
+            skill_name = action_match.group(1).strip()
+            args: dict = {}
+            if args_match:
+                raw = args_match.group(1).replace("\\\\", "\\")
+                try:
+                    args = json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+
+            if "path" in args:
+                args["path"] = args["path"].replace("/", "\\")
+
+            # Enforce 30s shell timeout
+            if skill_name == "shell" and "timeout" not in args:
+                args["timeout"] = 30
+
+            try:
+                skill = SKILL_REGISTRY[skill_name]
+                res = await skill.run(**args)
+                tool_output = res.output if res.success else f"Error: {res.error}"
+            except KeyError:
+                tool_output = f"Skill '{skill_name}' inconnu."
+            except Exception as e:
+                tool_output = f"Error: {e}"
+
+            ctx.messages.append({"role": "assistant", "content": response})
+            ctx.messages.append({
+                "role": "user",
+                "content": f"Tool result ({skill_name}):\n{tool_output}\n\nContinue or give final summary.",
+            })
+
+        return "Task reached max steps. Last tool output logged above."
 
 AGENT_REGISTRY: dict[str, type[BaseAgent]] = {
     "chat":       ChatAgent,
