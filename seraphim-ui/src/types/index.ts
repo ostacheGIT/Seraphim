@@ -4,6 +4,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   status?: "pending" | "done" | "error";
+  traceId?: string;
 }
 
 export interface Conversation {

@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Plus, Trash2, VolumeX } from "lucide-react";
+import { Plus, Trash2, BookOpen, VolumeX } from "lucide-react";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
+import SkillCatalogPanel from "./SkillCatalogPanel";
+import { fetchInstalledSkills } from "../hooks/useSeraphimBackend";
 
 interface OrbScreenProps {
     conversation: Conversation | null;
@@ -26,41 +28,59 @@ interface OrbScreenProps {
     onAgentChange: (id: string) => void;
 }
 
-const AGENTS = [
-    { id: "auto",                  label: "⚡ Auto" },
-    { id: "chat",                  label: "💬 Chat" },
-    { id: "react",                 label: "⚙️ Système" },
-    { id: "skill:calculator",      label: "🔢 Calculatrice" },
-    { id: "skill:web_search",      label: "🌐 Web Search" },
-    { id: "skill:code_interpreter",label: "🐍 Code" },
-    { id: "skill:think",           label: "🧠 Raisonnement" },
+const BASE_AGENTS = [
+    { id: "auto",                   label: "⚡ Auto" },
+    { id: "chat",                   label: "💬 Chat" },
+    { id: "react",                  label: "⚙️ Système" },
+    { id: "skill:calculator",       label: "🔢 Calculatrice" },
+    { id: "skill:web_search",       label: "🌐 Web Search" },
+    { id: "skill:code_interpreter", label: "🐍 Code" },
+    { id: "skill:think",            label: "🧠 Raisonnement" },
 ];
 
 export default function OrbScreen({
-                                      conversation,
-                                      conversations,
-                                      activeId,
-                                      isListening,
-                                      isThinking,
-                                      isSpeaking,
-                                      input,
-                                      onInputChange,
-                                      onSend,
-                                      onVoiceToggle,
-                                      onStopSpeaking,
-                                      onSelectConversation,
-                                      onNewConversation,
-                                      onDeleteConversation,
-                                      engineId,
-                                      onEngineChange,
-                                      agentId,
-                                      onAgentChange,
-                                  }: OrbScreenProps) {
-    const [panelOpen, setPanelOpen] = useState(false);
-    const [panelWidth, setPanelWidth] = useState(340);
-    const [resizing, setResizing] = useState(false);
-    const [view, setView] = useState<"list" | "chat">("list");
+    conversation,
+    conversations,
+    activeId,
+    isListening,
+    isThinking,
+    isSpeaking,
+    input,
+    onInputChange,
+    onSend,
+    onVoiceToggle,
+    onStopSpeaking,
+    onSelectConversation,
+    onNewConversation,
+    onDeleteConversation,
+    engineId,
+    onEngineChange,
+    agentId,
+    onAgentChange,
+}: OrbScreenProps) {
+    const [panelOpen, setPanelOpen]       = useState(false);
+    const [catalogOpen, setCatalogOpen]   = useState(false);
+    const [panelWidth, setPanelWidth]     = useState(340);
+    const [catalogWidth, setCatalogWidth] = useState(340);
+    const [resizing, setResizing]         = useState(false);
+    const [catalogResizing, setCatalogResizing] = useState(false);
+    const [view, setView]                 = useState<"list" | "chat">("list");
+    const [installedSkillAgents, setInstalledSkillAgents] = useState<{ id: string; label: string }[]>([]);
     const chatBottomRef = useRef<HTMLDivElement>(null);
+
+    const refreshInstalledSkills = () => {
+        fetchInstalledSkills().then((skills) => {
+            const baseIds = new Set(BASE_AGENTS.map((a) => a.id));
+            const extra = skills
+                .filter((s) => !baseIds.has(s.id))
+                .map((s) => ({ id: s.id, label: `🔧 ${s.name}` }));
+            setInstalledSkillAgents(extra);
+        });
+    };
+
+    useEffect(() => { refreshInstalledSkills(); }, []);
+
+    const agents = [...BASE_AGENTS, ...installedSkillAgents];
 
     const handleSelectConversation = (id: string) => {
         onSelectConversation(id);
@@ -77,13 +97,29 @@ export default function OrbScreen({
         const startX = e.clientX;
         const startW = panelWidth;
         setResizing(true);
-
         const onMove = (ev: MouseEvent) => {
-            const next = Math.min(800, Math.max(220, startW + (ev.clientX - startX)));
-            setPanelWidth(next);
+            setPanelWidth(Math.min(800, Math.max(220, startW + (ev.clientX - startX))));
         };
         const onUp = () => {
             setResizing(false);
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    };
+
+    const handleCatalogResizeStart = (e: React.MouseEvent) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = catalogWidth;
+        setCatalogResizing(true);
+        const onMove = (ev: MouseEvent) => {
+            // dragging left edge: move left = grow, move right = shrink
+            setCatalogWidth(Math.min(800, Math.max(220, startW - (ev.clientX - startX))));
+        };
+        const onUp = () => {
+            setCatalogResizing(false);
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", onUp);
         };
@@ -99,36 +135,44 @@ export default function OrbScreen({
         if (e.key === "Enter") onSend();
     };
 
-    const orbState = isListening
-        ? "listening"
-        : isSpeaking
-            ? "speaking"
-            : isThinking
-                ? "thinking"
-                : "idle";
+    const orbState = isListening ? "listening"
+        : isSpeaking ? "speaking"
+        : isThinking  ? "thinking"
+        : "idle";
 
-    const statusText = isListening
-        ? "● écoute en cours..."
-        : isSpeaking
-            ? "◈ Seraphim parle..."
-            : isThinking
-                ? "◌ traitement..."
-                : "cliquez pour parler";
+    const statusText = isListening ? "● écoute en cours..."
+        : isSpeaking ? "◈ Seraphim parle..."
+        : isThinking  ? "◌ traitement..."
+        : "cliquez pour parler";
+
+    const orbShift = panelOpen && !catalogOpen ? "shifted"
+        : catalogOpen && !panelOpen ? "shifted-right"
+        : panelOpen && catalogOpen  ? "shifted-both"
+        : "";
 
     return (
-        <div className="orb-root" style={{ ["--panel-w" as string]: `${panelWidth}px` }}>
-            {/* Hamburger */}
+        <div className="orb-root" style={{ ["--panel-w" as string]: `${panelWidth}px`, ["--catalog-w" as string]: `${catalogWidth}px` }}>
+
+            {/* ── Hamburger (gauche) ─────────────────────────────────── */}
             <button
                 className={`hamburger ${panelOpen ? "open" : ""}`}
                 onClick={() => setPanelOpen((p) => !p)}
                 aria-label="Menu"
             >
-                <span />
-                <span />
-                <span />
+                <span /><span /><span />
             </button>
 
-            {/* Slide-in chat panel */}
+            {/* ── Bouton catalogue (droite) ──────────────────────────── */}
+            <button
+                className={`catalog-toggle-btn ${catalogOpen ? "open" : ""}`}
+                onClick={() => setCatalogOpen((p) => !p)}
+                aria-label="Catalogue Skills"
+                title="Catalogue de skills"
+            >
+                <BookOpen size={14} />
+            </button>
+
+            {/* ── Panel gauche — conversations ───────────────────────── */}
             <aside
                 className={`chat-panel ${panelOpen ? "open" : ""}`}
                 style={resizing ? { transition: "none" } : undefined}
@@ -162,9 +206,8 @@ export default function OrbScreen({
                     )}
                 </div>
 
-                {/* Moteur + Agent sur la même ligne */}
+                {/* Moteur + Agent */}
                 <div style={{ display: "flex", gap: "0.5rem", margin: "0.6rem 1rem" }}>
-                    {/* Moteur — gauche */}
                     <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                         <span className="section-label">Moteur</span>
                         <select
@@ -177,8 +220,6 @@ export default function OrbScreen({
                             <option value="ollama_qwen7b">Qwen 2.5 7B · Précis</option>
                         </select>
                     </div>
-
-                    {/* Agent / Skill — droite */}
                     <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                         <span className="section-label">Agent</span>
                         <select
@@ -187,14 +228,14 @@ export default function OrbScreen({
                             onChange={(e) => onAgentChange(e.target.value)}
                             style={{ width: "100%" }}
                         >
-                            {AGENTS.map((a) => (
+                            {agents.map((a) => (
                                 <option key={a.id} value={a.id}>{a.label}</option>
                             ))}
                         </select>
                     </div>
                 </div>
 
-                {/* Vue liste — occupe tout l'espace disponible */}
+                {/* Vue liste */}
                 {view === "list" && (
                     <div className="conversation-list">
                         {conversations.length === 0 && (
@@ -213,10 +254,7 @@ export default function OrbScreen({
                                 </button>
                                 <button
                                     className="conv-delete"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onDeleteConversation(c.id);
-                                    }}
+                                    onClick={(e) => { e.stopPropagation(); onDeleteConversation(c.id); }}
                                     aria-label="Supprimer"
                                 >
                                     <Trash2 size={12} />
@@ -237,15 +275,12 @@ export default function OrbScreen({
                                 <div className="chat-msg assistant">
                                     <div className="msg-role">SERAPHIM</div>
                                     <div className="msg-content thinking-dots">
-                                        <span />
-                                        <span />
-                                        <span />
+                                        <span /><span /><span />
                                     </div>
                                 </div>
                             )}
                             <div ref={chatBottomRef} />
                         </div>
-
                         <div className="chat-input-area">
                             <input
                                 type="text"
@@ -259,7 +294,6 @@ export default function OrbScreen({
                     </>
                 )}
 
-                {/* Resize handle */}
                 <div
                     className={`panel-resize-handle${resizing ? " dragging" : ""}`}
                     onMouseDown={handleResizeStart}
@@ -267,8 +301,24 @@ export default function OrbScreen({
                 />
             </aside>
 
-            {/* Orbe principal — Three.js WebGL */}
-            <div className={`orb-stage ${panelOpen ? "shifted" : ""}`}>
+            {/* ── Panel droit — catalogue skills ─────────────────────── */}
+            <aside
+                className={`catalog-side-panel ${catalogOpen ? "open" : ""}`}
+                style={catalogResizing ? { transition: "none" } : undefined}
+            >
+                <div
+                    className={`catalog-resize-handle${catalogResizing ? " dragging" : ""}`}
+                    onMouseDown={handleCatalogResizeStart}
+                    aria-hidden
+                />
+                <div className="panel-header">
+                    <span className="panel-title">CATALOGUE SKILLS</span>
+                </div>
+                <SkillCatalogPanel onInstalled={refreshInstalledSkills} />
+            </aside>
+
+            {/* ── Orbe principal ─────────────────────────────────────── */}
+            <div className={`orb-stage ${orbShift}`}>
                 <SphereGL
                     state={orbState}
                     onClick={() => {
@@ -276,9 +326,7 @@ export default function OrbScreen({
                         onVoiceToggle();
                     }}
                 />
-
                 <div className="orb-status">{statusText}</div>
-
                 {isSpeaking && (
                     <button
                         className="mute-btn"
@@ -289,7 +337,6 @@ export default function OrbScreen({
                         <span>couper</span>
                     </button>
                 )}
-
                 <div className="dot-row">
                     <span className={`dot ${orbState === "idle"      ? "active" : ""}`} />
                     <span className={`dot ${orbState === "listening" ? "active" : ""}`} />

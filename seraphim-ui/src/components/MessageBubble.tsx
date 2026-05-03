@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Copy, Check, Terminal } from "lucide-react";
+import { Copy, Check, Terminal, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Message } from "../types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { sendFeedback } from "../hooks/useSeraphimBackend";
 
 interface MessageBubbleProps {
     message: Message;
@@ -65,6 +66,39 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
     );
 }
 
+function FeedbackButtons({ traceId }: { traceId: string }) {
+    const [voted, setVoted] = useState<"up" | "down" | null>(null);
+
+    const vote = async (score: number, type: "up" | "down") => {
+        if (voted) return;
+        setVoted(type);
+        try {
+            await sendFeedback(traceId, score);
+        } catch { /* silent */ }
+    };
+
+    return (
+        <div className="msg-feedback">
+            <button
+                className={`feedback-btn ${voted === "up" ? "active" : ""}`}
+                onClick={() => vote(1.0, "up")}
+                disabled={!!voted}
+                aria-label="Utile"
+            >
+                <ThumbsUp size={11} />
+            </button>
+            <button
+                className={`feedback-btn ${voted === "down" ? "active down" : ""}`}
+                onClick={() => vote(0.0, "down")}
+                disabled={!!voted}
+                aria-label="Pas utile"
+            >
+                <ThumbsDown size={11} />
+            </button>
+        </div>
+    );
+}
+
 export default function MessageBubble({ message }: MessageBubbleProps) {
     const isUser = message.role === "user";
 
@@ -105,6 +139,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 >
                     {message.content}
                 </ReactMarkdown>
+                {!isUser && message.traceId && <FeedbackButtons traceId={message.traceId} />}
             </div>
         </div>
     );

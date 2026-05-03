@@ -145,19 +145,24 @@ def _scan_installed(skills_root: Path, entries: list) -> int:
 def _scan_generic(cache_root: Path, entries: list) -> int:
     """Scanner générique pour sources non connues (voltagent, leoye, autonomys, etc.)."""
     count = 0
+    source_name = cache_root.name
     if not cache_root.exists():
         return 0
     for skill_md in cache_root.rglob("SKILL.md"):
         skill_dir = skill_md.parent
-        # Évite de remonter trop profondément dans l'arborescence (sécurité / perf)
         try:
             rel_parts = skill_md.relative_to(cache_root).parts
         except ValueError:
             continue
+        # Skip root-level SKILL.md (the repo itself, not a skill)
+        if len(rel_parts) <= 1:
+            continue
         if len(rel_parts) > 6:
             continue
+        # Skip slug matching source name (repo root false entry)
+        if skill_dir.name == source_name:
+            continue
         name, desc = _read_frontmatter(skill_md, skill_dir.name)
-        source_name = cache_root.name
         entries.append({
             "name": name,
             "slug": skill_dir.name,
@@ -216,9 +221,10 @@ def build_catalog(progress_callback=None) -> int:
         encoding="utf-8",
     )
 
-    _catalog_cache = entries
-    LOGGER.info("Skill catalog built: %d entries → %s", len(entries), catalog_path)
-    return len(entries)
+    _catalog_cache = _dedup_catalog(entries)
+    LOGGER.info("Skill catalog built: %d raw → %d deduped → %s",
+                len(entries), len(_catalog_cache), catalog_path)
+    return len(_catalog_cache)
 
 
 # ── Chargement in-memory ──────────────────────────────────────────────────────
@@ -235,14 +241,16 @@ _SOURCE_PRIORITY = {
 
 
 def _dedup_catalog(entries: list[Dict]) -> list[Dict]:
-    """Keep one entry per skill name — highest-priority source wins."""
+    """Keep one entry per skill name (highest-priority source wins), sorted by name."""
     best: dict[str, tuple[int, Dict]] = {}
     for entry in entries:
         name = entry["name"].lower()
         prio = _SOURCE_PRIORITY.get(entry.get("source", ""), 99)
         if name not in best or prio < best[name][0]:
             best[name] = (prio, entry)
-    return [e for _, e in best.values()]
+    deduped = [e for _, e in best.values()]
+    deduped.sort(key=lambda e: e["name"].lower())
+    return deduped
 
 
 def _load_catalog() -> list[Dict]:
@@ -322,8 +330,17 @@ def format_skill_catalog_block(skills: list[Dict]) -> str:
     return "\n".join(lines)
 
 
+def list_catalog(limit: int = 200, offset: int = 0, source: str = "") -> list[Dict]:
+    """Return catalog entries sorted by name, optionally filtered by source."""
+    catalog = _load_catalog()
+    if source:
+        catalog = [e for e in catalog if e.get("source") == source]
+    return catalog[offset: offset + limit]
+
+
 __all__ = [
     "build_catalog",
+    "list_catalog",
     "search_skills",
     "format_skill_catalog_block",
     "get_catalog_size",

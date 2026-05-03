@@ -28,6 +28,11 @@ from seraphim.memory.store import (
     delete_session,
     save_message,
 )
+from seraphim.learning.trace_store import (
+    save_trace,
+    Trace as LearningTrace,
+    set_feedback,
+)
 from seraphim.voice.speaker import synthesize_to_bytes, speak_async
 
 app = FastAPI(
@@ -41,6 +46,7 @@ app.add_middleware(
     allow_origins=settings.server.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Session-Id", "X-Engine-Id", "X-Routed-Agent", "X-Trace-Id"],
 )
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -84,6 +90,12 @@ class ChatResponse(BaseModel):
     engine_id: str
     session_id: str
     routed_agent: str   # agent réellement utilisé après routing
+    trace_id: str
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    score: float  # 0.0 = mauvais, 1.0 = bon
 
 
 class TTSRequest(BaseModel):
@@ -168,6 +180,111 @@ async def list_installed_skills():
     return {"skills": skills}
 
 
+@app.get("/skills/catalog")
+async def search_skill_catalog(q: str = "", limit: int = 200, offset: int = 0, source: str = ""):
+    from seraphim.skills.catalog import search_skills, list_catalog, get_catalog_size
+    if q.strip():
+        results = search_skills(q.strip(), top_k=limit)
+        if source:
+            results = [r for r in results if r.get("source") == source]
+    else:
+        results = list_catalog(limit=limit, offset=offset, source=source)
+    return {"skills": results, "catalog_size": get_catalog_size()}
+
+
+class SkillInstallRequest(BaseModel):
+    name: str
+    source: str = "hermes"
+    force: bool = False
+
+
+@app.post("/skills/install", dependencies=[Depends(_require_api_key)])
+async def install_skill_endpoint(req: SkillInstallRequest):
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, partial(_do_install_skill, req.name, req.source, req.force))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return result
+
+
+def _do_install_skill(name: str, source: str, force: bool) -> dict:
+    """
+    Install a skill from cache by slug+source, without going through a resolver.
+    Works for every source (hermes, openclaw, leoye, skillssh, autonomys, voltagent…).
+    """
+    from pathlib import Path as _Path
+    from seraphim.skills.parser import SkillParser
+    from seraphim.skills.tool_translator import ToolTranslator
+    from seraphim.skills.importer import SkillImporter
+    from seraphim.skills.sources.base import ResolvedSkill
+    import subprocess
+
+    if source == "installed":
+        raise ValueError("Skill déjà installé")
+
+    cache_base = _Path("~/.seraphim/skill-cache").expanduser() / source
+    if not cache_base.exists():
+        raise ValueError(f"Cache source '{source}' introuvable dans ~/.seraphim/skill-cache/")
+
+    # Find skill directory by slug — search all SKILL.md under the source cache
+    skill_dir: _Path | None = None
+    for skill_md in cache_base.rglob("SKILL.md"):
+        if skill_md.parent.name == name:
+            skill_dir = skill_md.parent
+            break
+
+    if skill_dir is None:
+        raise ValueError(f"Skill '{name}' introuvable dans le cache {source}")
+
+    # Read commit hash if available
+    commit = ""
+    git_dir = cache_base / ".git"
+    if git_dir.exists():
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(cache_base), "rev-parse", "HEAD"],
+                capture_output=True, text=True,
+            )
+            commit = r.stdout.strip()
+        except Exception:
+            pass
+
+    resolved = ResolvedSkill(
+        name=name,
+        source=source,
+        path=skill_dir,
+        category=skill_dir.parent.name,
+        description="",
+        commit=commit,
+    )
+
+    importer = SkillImporter(parser=SkillParser(), tool_translator=ToolTranslator())
+    res = importer.import_skill(resolved, force=force)
+
+    return {
+        "success": res.success,
+        "skipped": res.skipped,
+        "skill_name": name,
+        "source": source,
+        "warnings": res.warnings,
+    }
+
+
+@app.post("/skills/catalog/build", dependencies=[Depends(_require_api_key)])
+async def build_skill_catalog():
+    loop = asyncio.get_event_loop()
+    count = await loop.run_in_executor(None, _do_build_catalog)
+    return {"indexed": count}
+
+
+def _do_build_catalog() -> int:
+    from seraphim.skills.catalog import build_catalog
+    return build_catalog()
+
+
 def _resolve_engine_id(req: ChatRequest) -> str:
     engine_id: str | None = req.engine_id
     if engine_id is None and req.model:
@@ -220,12 +337,24 @@ async def chat(req: ChatRequest):
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", response, routed_agent)
 
+    trace_id = str(uuid.uuid4())
+    await save_trace(LearningTrace(
+        id=trace_id,
+        agent=routed_agent,
+        query=req.query,
+        final_response=response,
+        session_id=session_id,
+        tokens_in=len(req.query) // 4,
+        tokens_out=len(response) // 4,
+    ))
+
     return ChatResponse(
         response=response,
         agent=req.agent,
         engine_id=engine_id,
         session_id=session_id,
         routed_agent=routed_agent,
+        trace_id=trace_id,
     )
 
 
@@ -253,6 +382,17 @@ async def chat_stream(req: ChatRequest):
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", result, routed_agent)
 
+    trace_id = str(uuid.uuid4())
+    await save_trace(LearningTrace(
+        id=trace_id,
+        agent=routed_agent,
+        query=req.query,
+        final_response=result,
+        session_id=session_id,
+        tokens_in=len(req.query) // 4,
+        tokens_out=len(result) // 4,
+    ))
+
     async def generator():
         yield result
 
@@ -261,7 +401,17 @@ async def chat_stream(req: ChatRequest):
     response.headers["X-Session-Id"] = session_id
     response.headers["X-Engine-Id"] = engine_id
     response.headers["X-Routed-Agent"] = routed_agent
+    response.headers["X-Trace-Id"] = trace_id
     return response
+
+
+# ─── Feedback ────────────────────────────────────────────────────────────────
+
+@app.post("/feedback", dependencies=[Depends(_require_api_key)])
+async def submit_feedback(req: FeedbackRequest):
+    score = max(0.0, min(1.0, req.score))
+    await set_feedback(req.trace_id, score)
+    return {"ok": True}
 
 
 # ─── Memory ──────────────────────────────────────────────────────────────────

@@ -117,6 +117,59 @@ button, input, select, textarea {
 .hamburger.open span:nth-child(2) { opacity: 0; transform: scaleX(0); }
 .hamburger.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
 
+/* ─── Bouton catalogue (haut droite) ────────────────────────── */
+.catalog-toggle-btn {
+    position: absolute;
+    top: 18px;
+    right: 18px;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, color 0.2s, transform 0.2s;
+}
+
+.catalog-toggle-btn:hover {
+    border-color: rgba(255,255,255,0.28);
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    transform: translateY(-1px);
+}
+
+.catalog-toggle-btn.open {
+    border-color: rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.08);
+    color: var(--accent);
+}
+
+/* ─── Panel droit — catalogue ────────────────────────────────── */
+.catalog-side-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: var(--catalog-w);
+    height: 100%;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    transform: translateX(100%);
+    transition: transform var(--transition);
+    display: flex;
+    flex-direction: column;
+    z-index: 50;
+    box-shadow: -20px 0 60px rgba(0,0,0,0.35);
+}
+
+.catalog-side-panel.open {
+    transform: translateX(0);
+}
+
 /* ─── Panel ─────────────────────────────────────────────────── */
 .chat-panel {
     position: absolute;
@@ -157,6 +210,29 @@ button, input, select, textarea {
 
 .chat-panel:has(.panel-resize-handle.dragging) ~ *,
 body:has(.panel-resize-handle.dragging) {
+    user-select: none;
+    cursor: col-resize;
+}
+
+.catalog-resize-handle {
+    position: absolute;
+    top: 0;
+    left: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 60;
+    background: transparent;
+    transition: background 0.15s;
+    border-radius: 3px 0 0 3px;
+}
+.catalog-resize-handle:hover,
+.catalog-resize-handle.dragging {
+    background: rgba(167, 139, 250, 0.35);
+}
+
+.catalog-side-panel:has(.catalog-resize-handle.dragging) ~ *,
+body:has(.catalog-resize-handle.dragging) {
     user-select: none;
     cursor: col-resize;
 }
@@ -210,6 +286,197 @@ body:has(.panel-resize-handle.dragging) {
     font-size: 11px;
     color: var(--text-dim);
 }
+
+/* ─── Skill Catalog ─────────────────────────────────────────── */
+.catalog-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    padding: 8px 0 0;
+}
+
+.catalog-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 8px;
+}
+
+.catalog-search-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.catalog-search-icon {
+    position: absolute;
+    left: 8px;
+    color: var(--text-faint);
+    pointer-events: none;
+}
+
+.catalog-search {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 11px;
+    padding: 5px 8px 5px 26px;
+    outline: none;
+}
+
+.catalog-search:focus {
+    border-color: var(--border-mid);
+}
+
+.catalog-build-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 5px;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.catalog-build-btn:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--border-mid);
+}
+
+.catalog-build-btn:disabled { cursor: default; }
+
+.catalog-status {
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 0 10px 6px;
+    letter-spacing: 0.3px;
+}
+
+.catalog-results {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+.skill-card {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.skill-card:hover {
+    background: rgba(255,255,255,0.025);
+}
+
+.skill-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.skill-card-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.skill-badge {
+    font-size: 8px;
+    letter-spacing: 1px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.07);
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.skill-badge-installed { background: rgba(74,222,128,0.12); color: #4ade80; }
+.skill-badge-hermes    { background: rgba(96,165,250,0.12); color: #60a5fa; }
+.skill-badge-openclaw  { background: rgba(251,191,36,0.12); color: #fbbf24; }
+.skill-badge-skillssh  { background: rgba(167,139,250,0.12); color: #a78bfa; }
+
+.skill-card-desc {
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.45;
+}
+
+.skill-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 2px;
+}
+
+.skill-card-category {
+    font-size: 9px;
+    color: var(--text-faint);
+    letter-spacing: 0.5px;
+}
+
+.skill-install-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.skill-install-btn:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--border-mid);
+    background: rgba(255,255,255,0.05);
+}
+
+.skill-install-btn.installed {
+    color: #4ade80;
+    border-color: rgba(74,222,128,0.3);
+    cursor: default;
+}
+
+.skill-install-btn:disabled:not(.installed) { cursor: default; opacity: 0.5; }
+
+.catalog-load-more {
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--border-soft);
+    color: var(--text-dim);
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.catalog-load-more:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
 
 .conv-item {
     display: flex;
@@ -297,6 +564,45 @@ body:has(.panel-resize-handle.dragging) {
     font-size: 12px;
     line-height: 1.6;
     color: var(--text);
+}
+
+.msg-feedback {
+    display: flex;
+    gap: 5px;
+    margin-top: 7px;
+}
+
+.feedback-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    color: rgba(255,255,255,0.25);
+    cursor: pointer;
+    padding: 3px 6px;
+    transition: color 0.15s, border-color 0.15s;
+    line-height: 1;
+}
+
+.feedback-btn:hover:not(:disabled) {
+    color: rgba(255,255,255,0.6);
+    border-color: rgba(255,255,255,0.25);
+}
+
+.feedback-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.feedback-btn.active.down {
+    color: #f87171;
+    border-color: #f87171;
+}
+
+.feedback-btn:disabled {
+    cursor: default;
 }
 
 /* ─── Markdown body ─────────────────────────────────────────── */
@@ -513,6 +819,14 @@ body:has(.panel-resize-handle.dragging) {
 
 .orb-stage.shifted {
     transform: translateX(calc(var(--panel-w) / 2));
+}
+
+.orb-stage.shifted-right {
+    transform: translateX(calc(var(--catalog-w) / -2));
+}
+
+.orb-stage.shifted-both {
+    transform: translateX(0);
 }
 
 /* ─── Canvas WebGL (SphereGL) ───────────────────────────────── */

@@ -45,7 +45,7 @@ export default function App() {
             addMessage(trimmed, "user");
             setIsThinking(true);
             try {
-                const response = await askSeraphim(
+                const { response, traceId } = await askSeraphim(
                     trimmed,
                     activeId ?? undefined,
                     undefined,
@@ -53,7 +53,7 @@ export default function App() {
                     engineId,
                     agentId,
                 );
-                addMessage(response, "assistant", "done");
+                addMessage(response, "assistant", "done", traceId ?? undefined);
             } catch {
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
                 addMessage(errMsg, "assistant", "error");

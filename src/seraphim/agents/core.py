@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -29,10 +30,33 @@ class AgentContext:
         self.messages.insert(0, {"role": "system", "content": content})
 
 
+def _auto_trace_wrapper(fn):
+    @functools.wraps(fn)
+    async def wrapper(self, query: str, context=None):
+        from seraphim.learning.collector import TraceCollector
+        _tracer = TraceCollector(self.name, query, getattr(context, "session_id", ""))
+        try:
+            result = await fn(self, query, context)
+            _tracer.finish(result, success=True)
+            await _tracer.save()
+            return result
+        except Exception as exc:
+            _tracer.finish(f"ERROR: {exc}", success=False)
+            await _tracer.save()
+            raise
+    return wrapper
+
+
 class BaseAgent(ABC):
     name: str = "base"
     description: str = "Base agent"
     system_prompt: str = "You are Seraphim, a helpful personal AI assistant."
+    _auto_trace: bool = True
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "run" in cls.__dict__ and getattr(cls, "_auto_trace", True):
+            cls.run = _auto_trace_wrapper(cls.__dict__["run"])
 
     def __init__(self, engine_id: Optional[str] = None) -> None:
         # On stocke seulement l'ID; le moteur réel est récupéré via get_engine

@@ -1,0 +1,180 @@
+"""
+Learning orchestrator — full loop:
+  collect traces → mine SFT pairs → optimize prompts → eval → accept/reject
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from seraphim.learning.trace_store import trace_stats, save_overlay
+from seraphim.learning.miner import mine
+from seraphim.learning.optimizer import build_overlay
+from seraphim.learning.evaluator import evaluate_agent
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LearningConfig:
+    agents: list[str] = field(default_factory=lambda: ["react", "chat"])
+    min_traces: int = 5               # minimum traces before optimizing
+    min_quality: float = 0.6          # quality threshold for SFT mining
+    min_improvement: float = 0.05     # accept overlay only if score improves by this
+    max_examples: int = 5             # few-shot examples per overlay
+    test_queries: list[str] | None = None
+    dry_run: bool = False             # if True, build overlays but don't save
+    run_finetune: bool = False        # Step 3: LoRA fine-tune after mining
+    finetune_base_model: str = "Qwen/Qwen2.5-3B-Instruct"
+    finetune_epochs: int = 3
+    finetune_ollama_name: str = "seraphim-tuned"
+
+
+@dataclass
+class LearningResult:
+    stats_before: dict[str, Any]
+    mined_pairs: int
+    overlays: list[dict[str, Any]]
+    accepted: int
+    rejected: int
+    finetune_result: dict[str, Any] | None = None
+
+
+async def run_learning_loop(config: LearningConfig | None = None) -> LearningResult:
+    if config is None:
+        config = LearningConfig()
+
+    stats_before = await trace_stats()
+    logger.info("=== Learning loop start === traces=%d good=%d",
+                stats_before["total_traces"], stats_before["good_traces"])
+
+    # ── Step 1: Mine SFT pairs ───────────────────────────────────────────────
+    total_mined = 0
+    for agent_name in config.agents:
+        n = await mine(agent=agent_name, min_quality=config.min_quality)
+        total_mined += n
+        logger.info("Mined %d pairs for agent '%s'", n, agent_name)
+
+    # ── Step 2: Optimize + Eval + Accept/Reject ──────────────────────────────
+    overlays_built: list[dict[str, Any]] = []
+    accepted = 0
+    rejected = 0
+
+    for agent_name in config.agents:
+        logger.info("Optimizing agent '%s'...", agent_name)
+
+        try:
+            from seraphim.agents.base import get_agent
+            ag = get_agent(agent_name)
+            base_prompt = ag.system_prompt
+        except Exception as e:
+            logger.warning("Could not load agent '%s': %s", agent_name, e)
+            continue
+
+        # Check we have enough good traces
+        from seraphim.learning.trace_store import load_sft_pairs
+        pairs = await load_sft_pairs(agent=agent_name, min_quality=config.min_quality, limit=config.min_traces)
+        if len(pairs) < config.min_traces:
+            logger.info("Agent '%s': only %d pairs (need %d), skipping", agent_name, len(pairs), config.min_traces)
+            continue
+
+        # Build overlay
+        overlay = await build_overlay(
+            target=agent_name,
+            base_system_prompt=base_prompt,
+            min_quality=config.min_quality,
+            max_examples=config.max_examples,
+        )
+        if not overlay:
+            logger.info("Agent '%s': no overlay built", agent_name)
+            continue
+
+        # Eval before
+        logger.info("Evaluating '%s' BEFORE optimization...", agent_name)
+        before = await evaluate_agent(agent_name, config.test_queries, base_prompt)
+
+        # Eval after
+        logger.info("Evaluating '%s' AFTER optimization...", agent_name)
+        after = await evaluate_agent(agent_name, config.test_queries, overlay.get("system_prompt", base_prompt))
+
+        improvement = after["mean_score"] - before["mean_score"]
+        latency_delta = after["mean_latency_ms"] - before["mean_latency_ms"]
+        accept = improvement >= config.min_improvement
+
+        logger.info(
+            "Agent '%s': score %.3f→%.3f (Δ%.3f)  latency %.0f→%.0fms (Δ%+.0f)  tokens_out=%d → %s",
+            agent_name,
+            before["mean_score"], after["mean_score"], improvement,
+            before["mean_latency_ms"], after["mean_latency_ms"], latency_delta,
+            after["total_tokens_out"],
+            "ACCEPT" if accept else "REJECT",
+        )
+
+        record = {
+            "agent": agent_name,
+            "overlay": overlay,
+            "score_before": before["mean_score"],
+            "score_after": after["mean_score"],
+            "improvement": improvement,
+            "latency_before_ms": before["mean_latency_ms"],
+            "latency_after_ms": after["mean_latency_ms"],
+            "tokens_out": after["total_tokens_out"],
+            "accepted": accept,
+        }
+        overlays_built.append(record)
+
+        if not config.dry_run:
+            await save_overlay(
+                target=agent_name,
+                overlay=overlay,
+                score_before=before["mean_score"],
+                score_after=after["mean_score"],
+                accepted=accept,
+                latency_before_ms=before["mean_latency_ms"],
+                latency_after_ms=after["mean_latency_ms"],
+            )
+
+        if accept:
+            accepted += 1
+        else:
+            rejected += 1
+
+    # ── Step 3: LoRA fine-tuning (optional) ─────────────────────────────────
+    finetune_result: dict[str, Any] | None = None
+    if config.run_finetune and not config.dry_run:
+        from seraphim.learning.finetuner import FineTuneConfig, run_lora_finetune
+        from seraphim.learning.miner import export_jsonl
+
+        sft_path = str(Path.home() / ".seraphim" / "sft_pairs.jsonl")
+        await export_jsonl(sft_path, min_quality=config.min_quality)
+
+        ft_cfg = FineTuneConfig(
+            base_model=config.finetune_base_model,
+            epochs=config.finetune_epochs,
+            sft_path=sft_path,
+            ollama_model_name=config.finetune_ollama_name,
+        )
+        logger.info("=== LoRA fine-tuning start ===")
+        ft = await run_lora_finetune(ft_cfg)
+        finetune_result = {
+            "success": ft.success,
+            "train_loss": ft.train_loss,
+            "ollama_model": ft.ollama_model,
+            "message": ft.message,
+        }
+        logger.info("=== LoRA fine-tuning done === success=%s loss=%s", ft.success, ft.train_loss)
+
+    logger.info("=== Learning loop done === mined=%d accepted=%d rejected=%d",
+                total_mined, accepted, rejected)
+
+    return LearningResult(
+        stats_before=stats_before,
+        mined_pairs=total_mined,
+        overlays=overlays_built,
+        accepted=accepted,
+        rejected=rejected,
+        finetune_result=finetune_result,
+    )

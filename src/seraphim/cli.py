@@ -288,6 +288,10 @@ app.add_typer(monitor_app, name="monitor")
 from seraphim.digest.digest_cmd import app as digest_app
 app.add_typer(digest_app, name="digest")
 
+# ── Learning loop ───────────────────────────────────────────────────────────────
+from seraphim.learning.learning_cmd import app as learn_app
+app.add_typer(learn_app, name="learn")
+
 
 if __name__ == "__main__":
     app()

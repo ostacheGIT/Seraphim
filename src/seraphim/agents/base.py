@@ -442,6 +442,7 @@ class ReActAgent(BaseAgent):
 
     name = "react"
     description = "Agent ReAct — lit des fichiers, cherche sur le web, raisonne étape par étape"
+    _auto_trace = False  # manual step-level tracing in run()
 
     @property
     def system_prompt(self) -> str:
@@ -606,6 +607,10 @@ class ReActAgent(BaseAgent):
         except Exception:
             logger.warning("External skill catalog unavailable", exc_info=True)
 
+        # ── Trace collector ──────────────────────────────────────────────────
+        from seraphim.learning.collector import TraceCollector
+        _tracer = TraceCollector(self.name, query, getattr(context, "session_id", ""))
+
         # ── ReAct loop standard pour tout le reste ───────────────────────────
         for _ in range(8):
             response = await self._chat(ctx.messages)
@@ -649,6 +654,8 @@ class ReActAgent(BaseAgent):
                     except Exception as e:
                         tool_output = f"Skill error: {type(e).__name__}: {e}"
 
+                _tracer.record_step(skill_name, args, tool_output)
+
                 ctx.messages.append({"role": "assistant", "content": response})
                 ctx.messages.append({
                     "role": "user",
@@ -662,8 +669,12 @@ class ReActAgent(BaseAgent):
 
             else:
                 ctx.add_assistant(response)
+                _tracer.finish(response, success=True)
+                await _tracer.save()
                 return response
 
+        _tracer.finish("I was unable to complete the task within the allowed steps.", success=False)
+        await _tracer.save()
         return "I was unable to complete the task within the allowed steps."
 
 class BuiltinSkillAgent(BaseAgent):
