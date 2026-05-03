@@ -96,9 +96,19 @@ async def init_db() -> None:
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_traces_agent ON traces(agent)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_traces_feedback ON traces(feedback)")
-        await db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sft_trace_id ON sft_pairs(trace_id)"
-        )
+        # Remove duplicate trace_ids before creating unique index (handles legacy data)
+        await db.execute("""
+            DELETE FROM sft_pairs
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid) FROM sft_pairs GROUP BY trace_id
+            )
+        """)
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sft_trace_id ON sft_pairs(trace_id)"
+            )
+        except Exception:
+            pass  # index already exists
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_overlay_hist_target ON prompt_overlays_history(target)"
         )

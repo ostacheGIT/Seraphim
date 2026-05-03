@@ -44,7 +44,8 @@ async def score_response(query: str, response: str, engine=None) -> float:
             {"role": "system", "content": "You are a strict impartial evaluator. Reply with only a number."},
             {"role": "user", "content": prompt},
         ])
-        raw = result.messages[-1].get("content", "3").strip()
+        msgs = result.get("messages", []) if isinstance(result, dict) else getattr(result, "messages", [])
+        raw = msgs[-1].get("content", "3").strip() if msgs else "3"
         score = int(raw[0]) if raw and raw[0].isdigit() else 3
         return max(1, min(5, score)) / 5.0
     except Exception as e:

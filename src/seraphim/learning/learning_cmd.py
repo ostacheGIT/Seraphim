@@ -185,23 +185,107 @@ def finetune_cmd(
 def run_cmd(
     agents: str = typer.Option("react,chat", "--agents", "-a"),
     dry_run: bool = typer.Option(False, "--dry-run"),
+    grpo: bool = typer.Option(False, "--grpo", "-g", help="Run GRPO sampling before SFT mining"),
+    grpo_generations: int = typer.Option(4, "--grpo-g", help="GRPO generations per prompt"),
     finetune: bool = typer.Option(False, "--finetune", "-f", help="Run LoRA fine-tuning after optimize"),
 ):
-    """Full learning loop: mine → optimize → eval → accept/reject [→ finetune]."""
-    optimize_cmd(agents=agents, min_quality=0.6, max_examples=5, dry_run=dry_run)
-    if finetune and not dry_run:
-        finetune_cmd(
-            base_model="Qwen/Qwen2.5-3B-Instruct",
-            sft_path="~/.seraphim/sft_pairs.jsonl",
-            output_dir="~/.seraphim/lora_adapter",
-            epochs=3,
-            lora_r=16,
-            ollama_name="seraphim-tuned",
-            no_merge=False,
-            no_ollama=False,
-            use_unsloth=False,
-            check=False,
+    """Full learning loop: [GRPO →] mine → optimize → eval → accept/reject [→ finetune]."""
+    async def _run():
+        from seraphim.learning.orchestrator import LearningConfig, run_learning_loop
+        cfg = LearningConfig(
+            agents=[a.strip() for a in agents.split(",")],
+            dry_run=dry_run,
+            run_grpo=grpo,
+            grpo_generations=grpo_generations,
+            run_finetune=finetune and not dry_run,
         )
+        console.print(
+            f"[bold]Full learning loop[/bold] — agents={agents}"
+            + (" [GRPO]" if grpo else "")
+            + (" [finetune]" if finetune else "")
+        )
+        result = await run_learning_loop(cfg)
+
+        if result.grpo_result:
+            g = result.grpo_result
+            console.print(
+                f"  GRPO: prompts=[cyan]{g['prompts_used']}[/cyan] "
+                f"generations=[cyan]{g['total_generations']}[/cyan] "
+                f"reward=[yellow]{g['mean_reward']:.3f}[/yellow] "
+                f"pairs=[green]{g['pairs_saved']}[/green]"
+            )
+        console.print(f"  SFT pairs mined : [yellow]{result.mined_pairs}[/yellow]")
+        console.print(f"  Overlays accepted: [green]{result.accepted}[/green]")
+        console.print(f"  Overlays rejected: [red]{result.rejected}[/red]")
+        if result.finetune_result:
+            ft = result.finetune_result
+            s = "[green]✓[/green]" if ft["success"] else "[red]✗[/red]"
+            console.print(f"  Finetune: {s} loss={ft.get('train_loss', '?')}")
+
+    asyncio.run(_run())
+
+
+@app.command("grpo")
+def grpo_cmd(
+    agent: str = typer.Option("", "--agent", "-a", help="Filter by agent (empty = all)"),
+    generations: int = typer.Option(4, "--generations", "-g", help="Responses per prompt"),
+    max_prompts: int = typer.Option(30, "--max-prompts", "-n", help="Max prompts per run"),
+    threshold: float = typer.Option(0.0, "--threshold", "-t", help="Min advantage to save pair"),
+    backprop: bool = typer.Option(False, "--backprop", "-b", help="Run HuggingFace GRPO training"),
+    base_model: str = typer.Option("Qwen/Qwen2.5-3B-Instruct", "--model", "-m"),
+    check: bool = typer.Option(False, "--check", help="Check backprop dependencies"),
+):
+    """GRPO: sample N responses per prompt, score with LLM-judge, store winners."""
+    if check:
+        from seraphim.learning.grpo_trainer import check_backprop_deps
+        missing = check_backprop_deps()
+        if missing:
+            console.print(f"[red]✗[/red] Missing (backprop): {', '.join(missing)}")
+            console.print(f"  Install: [bold]pip install {' '.join(missing)}[/bold]")
+        else:
+            console.print("[green]✓[/green] All GRPO backprop dependencies installed.")
+        return
+
+    async def _run():
+        from seraphim.learning.grpo_trainer import GRPOConfig, run_grpo
+        cfg = GRPOConfig(
+            num_generations=generations,
+            min_prompts=1,
+            max_prompts=max_prompts,
+            agent=agent,
+            advantage_threshold=threshold,
+            run_backprop=backprop,
+            base_model=base_model,
+        )
+        console.print(
+            f"[bold]GRPO sampling[/bold] — {generations} generations × "
+            f"(up to {max_prompts} prompts)"
+            + (f" — agent=[cyan]{agent}[/cyan]" if agent else "")
+        )
+        if backprop:
+            console.print(f"  [yellow]+ backprop enabled[/yellow] — model: {base_model}")
+
+        with console.status("[dim]Sampling & scoring...[/dim]"):
+            result = await run_grpo(cfg)
+
+        if not result.success:
+            console.print(f"[red]✗[/red] {result.message}")
+            return
+
+        console.print(f"\n[bold]GRPO results[/bold]")
+        console.print(f"  Prompts used      : [cyan]{result.prompts_used}[/cyan]")
+        console.print(f"  Total generations : [cyan]{result.total_generations}[/cyan]")
+        console.print(f"  Mean reward       : [yellow]{result.mean_reward:.3f}[/yellow]")
+        console.print(f"  Mean adv (saved)  : [yellow]{result.mean_advantage_saved:+.3f}[/yellow]")
+        console.print(f"  New SFT pairs     : [green]{result.pairs_saved}[/green]")
+        if backprop:
+            status_str = "[green]✓[/green]" if result.backprop_done else "[red]✗[/red]"
+            console.print(f"  Backprop          : {status_str}")
+            if result.output_dir:
+                console.print(f"  Adapter           : [cyan]{result.output_dir}[/cyan]")
+        console.print(f"\n[dim]{result.message}[/dim]")
+
+    asyncio.run(_run())
 
 
 @app.command("feedback")

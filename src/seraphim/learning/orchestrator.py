@@ -27,6 +27,10 @@ class LearningConfig:
     max_examples: int = 5             # few-shot examples per overlay
     test_queries: list[str] | None = None
     dry_run: bool = False             # if True, build overlays but don't save
+    run_grpo: bool = False            # Step 1b: GRPO sampling before SFT mining
+    grpo_generations: int = 4         # N responses per prompt for GRPO
+    grpo_max_prompts: int = 30        # max prompts per GRPO run
+    grpo_backprop: bool = False       # enable HuggingFace GRPO backprop (requires torch)
     run_finetune: bool = False        # Step 3: LoRA fine-tune after mining
     finetune_base_model: str = "Qwen/Qwen2.5-3B-Instruct"
     finetune_epochs: int = 3
@@ -40,6 +44,7 @@ class LearningResult:
     overlays: list[dict[str, Any]]
     accepted: int
     rejected: int
+    grpo_result: dict[str, Any] | None = None
     finetune_result: dict[str, Any] | None = None
 
 
@@ -50,6 +55,33 @@ async def run_learning_loop(config: LearningConfig | None = None) -> LearningRes
     stats_before = await trace_stats()
     logger.info("=== Learning loop start === traces=%d good=%d",
                 stats_before["total_traces"], stats_before["good_traces"])
+
+    # ── Step 0: GRPO sampling (optional) — runs before SFT mining ───────────
+    grpo_result: dict[str, Any] | None = None
+    if config.run_grpo and not config.dry_run:
+        from seraphim.learning.grpo_trainer import GRPOConfig, run_grpo
+        grpo_cfg = GRPOConfig(
+            num_generations=config.grpo_generations,
+            min_prompts=1,
+            max_prompts=config.grpo_max_prompts,
+            run_backprop=config.grpo_backprop,
+        )
+        logger.info("=== GRPO sampling start === generations=%d max_prompts=%d",
+                    grpo_cfg.num_generations, grpo_cfg.max_prompts)
+        gr = await run_grpo(grpo_cfg)
+        grpo_result = {
+            "success": gr.success,
+            "prompts_used": gr.prompts_used,
+            "total_generations": gr.total_generations,
+            "mean_reward": gr.mean_reward,
+            "pairs_saved": gr.pairs_saved,
+            "backprop_done": gr.backprop_done,
+            "message": gr.message,
+        }
+        logger.info(
+            "=== GRPO done === prompts=%d generations=%d mean_reward=%.3f pairs_saved=%d",
+            gr.prompts_used, gr.total_generations, gr.mean_reward, gr.pairs_saved,
+        )
 
     # ── Step 1: Mine SFT pairs ───────────────────────────────────────────────
     total_mined = 0
@@ -176,5 +208,6 @@ async def run_learning_loop(config: LearningConfig | None = None) -> LearningRes
         overlays=overlays_built,
         accepted=accepted,
         rejected=rejected,
+        grpo_result=grpo_result,
         finetune_result=finetune_result,
     )
