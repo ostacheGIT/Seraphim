@@ -141,6 +141,15 @@ async def save_trace(trace: Trace) -> None:
         )
         await db.commit()
 
+    # Update learned router stats — use explicit feedback if available, else success heuristic
+    try:
+        from seraphim.agents.learned_router import classify_query, update_routing_stats
+        score = trace.feedback if trace.feedback >= 0 else (0.7 if trace.success else 0.3)
+        query_class = classify_query(trace.query)
+        await update_routing_stats(trace.agent, query_class, score, trace.latency_ms)
+    except Exception:
+        pass  # never block trace saving
+
 
 async def load_traces(
     agent: str | None = None,

@@ -709,6 +709,61 @@ def daemon_logs(
         console.print(f"[red]✗[/red] Could not read log: {e}")
 
 
+@app.command("routing")
+def routing_cmd(
+    reset: bool = typer.Option(False, "--reset", help="Delete all learned routing stats"),
+    min_samples: int = typer.Option(1, "--min-samples", "-n", help="Only show entries with ≥ N samples"),
+):
+    """Show learned routing statistics (which agent wins per query class)."""
+    async def _run():
+        from seraphim.agents.learned_router import get_routing_stats, _DB_PATH, _ensure_table
+        import aiosqlite
+
+        if reset:
+            await _ensure_table()
+            async with aiosqlite.connect(_DB_PATH) as db:
+                await db.execute("DELETE FROM routing_stats")
+                await db.commit()
+            console.print("[green]✓[/green] Routing stats cleared.")
+            return
+
+        stats = await get_routing_stats()
+        if not stats:
+            console.print("[dim]No routing stats yet. Stats accumulate as the system handles queries.[/dim]")
+            return
+
+        filtered = [s for s in stats if s["sample_count"] >= min_samples]
+        if not filtered:
+            console.print(f"[dim]No entries with ≥ {min_samples} samples yet.[/dim]")
+            return
+
+        t = Table(show_header=True, title="Learned Routing Stats")
+        t.add_column("Query Class", style="cyan")
+        t.add_column("Agent")
+        t.add_column("Samples", justify="right")
+        t.add_column("Mean Score", justify="right")
+        t.add_column("Mean Latency", justify="right")
+        t.add_column("Status")
+
+        current_class = None
+        for s in filtered:
+            is_best = current_class != s["query_class"]
+            current_class = s["query_class"]
+            score_color = "green" if s["mean_score"] >= 0.7 else ("yellow" if s["mean_score"] >= 0.5 else "red")
+            t.add_row(
+                s["query_class"] if is_best else "",
+                f"[bold]{s['agent']}[/bold]" if is_best else s["agent"],
+                str(s["sample_count"]),
+                f"[{score_color}]{s['mean_score']:.3f}[/{score_color}]",
+                f"{int(s['mean_latency_ms'])}ms" if s["mean_latency_ms"] else "—",
+                "[green]★ best[/green]" if is_best else "",
+            )
+        console.print(t)
+        console.print(f"\n[dim]Learned router activates at ≥5 samples with ≥0.05 score advantage.[/dim]")
+
+    asyncio.run(_run())
+
+
 @app.command("traces")
 def traces_cmd(
     agent: str = typer.Option("", "--agent", "-a"),

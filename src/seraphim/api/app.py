@@ -393,13 +393,23 @@ def _resolve_engine_id(req: ChatRequest) -> str:
     return engine_id or "ollama_qwen3b"
 
 
-def _resolve_agent_name(req: ChatRequest) -> str:
+async def _resolve_agent_name(req: ChatRequest) -> str:
     """
     Si agent == "auto" (ou non fourni), le router choisit automatiquement.
+    Le learned router peut override le choix statique si assez de traces.
     Sinon on respecte le choix explicite.
     """
     if req.agent in ("auto", "", None):
         decision = auto_route(req.query)
+        try:
+            from seraphim.agents.learned_router import learned_route
+            override = await learned_route(req.query, decision.agent)
+            if override:
+                logger.debug("Learned router override: %s → %s (%s)",
+                             decision.agent, override.agent, override.reason)
+                return override.agent
+        except Exception:
+            pass
         return decision.agent
     return req.agent
 
@@ -415,7 +425,7 @@ def _build_agent(agent_name: str, engine_id: str):
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
 async def chat(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
-    routed_agent = _resolve_agent_name(req)
+    routed_agent = await _resolve_agent_name(req)
 
     try:
         ag = _build_agent(routed_agent, engine_id)
@@ -459,7 +469,7 @@ async def chat(req: ChatRequest):
 @app.post("/chat/stream", dependencies=[Depends(_require_api_key)])
 async def chat_stream(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
-    routed_agent = _resolve_agent_name(req)
+    routed_agent = await _resolve_agent_name(req)
 
     try:
         ag = _build_agent(routed_agent, engine_id)
