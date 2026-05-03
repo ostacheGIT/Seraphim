@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from rich.console import Console
 from rich.table import Table
 
 app = typer.Typer(name="learn", help="Learning loop — collect traces, mine SFT pairs, optimize prompts.")
+daemon_app = typer.Typer(name="daemon", help="Background learning daemon — runs the learning loop automatically.")
+app.add_typer(daemon_app)
 console = Console()
 
 
@@ -419,7 +422,11 @@ def _start_daemon(interval, agents, min_quality, finetune, min_new_traces):
 
     kwargs = dict(stdout=log_file, stderr=log_file)
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+        )
     else:
         kwargs["start_new_session"] = True
 
@@ -449,6 +456,257 @@ def stop_cmd():
         console.print(f"[yellow]⚠[/yellow] Process {pid_str} not found — PID file removed.")
     except PermissionError:
         console.print(f"[red]✗[/red] Permission denied killing PID {pid_str}.")
+
+
+@daemon_app.command("start")
+def daemon_start(
+    interval: float = typer.Option(6.0, "--interval", "-i", help="Hours between runs"),
+    agents: str = typer.Option("react,chat", "--agents", "-a"),
+    min_quality: float = typer.Option(0.6, "--quality", "-q"),
+    min_new_traces: int = typer.Option(3, "--min-traces", help="Min new traces to trigger a run"),
+    grpo: bool = typer.Option(False, "--grpo", "-g", help="Run GRPO sampling each cycle"),
+    grpo_generations: int = typer.Option(4, "--grpo-g", help="GRPO generations per prompt"),
+    grpo_max_prompts: int = typer.Option(30, "--grpo-n", help="GRPO max prompts per run"),
+    finetune: bool = typer.Option(False, "--finetune", "-f", help="Run LoRA fine-tune each cycle"),
+    auto_start: bool = typer.Option(False, "--auto-start", help="Auto-start daemon when Seraphim server starts"),
+):
+    """Start the learning daemon in the background."""
+    from seraphim.learning.daemon import PID_FILE, CONFIG_FILE, is_alive, read_state
+
+    state = read_state()
+    if PID_FILE.exists():
+        pid_str = PID_FILE.read_text().strip()
+        try:
+            pid = int(pid_str)
+            if is_alive(pid):
+                console.print(f"[yellow]⚠[/yellow]  Daemon already running (PID {pid}). "
+                               f"Use [bold]seraphim learn daemon stop[/bold] first.")
+                return
+        except ValueError:
+            pass
+        PID_FILE.unlink(missing_ok=True)
+
+    config = {
+        "interval_hours": interval,
+        "agents": agents,
+        "min_quality": min_quality,
+        "min_new_traces": min_new_traces,
+        "run_grpo": grpo,
+        "grpo_generations": grpo_generations,
+        "grpo_max_prompts": grpo_max_prompts,
+        "run_finetune": finetune,
+        "auto_start": auto_start,
+    }
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+    from seraphim.learning.daemon import LOG_FILE
+    log_file = open(LOG_FILE, "a")
+
+    # On Windows use pythonw.exe (no console window); fall back to python.exe if missing
+    if sys.platform == "win32":
+        from pathlib import Path as _Path
+        pythonw = _Path(sys.executable).parent / "pythonw.exe"
+        executable = str(pythonw) if pythonw.exists() else sys.executable
+    else:
+        executable = sys.executable
+
+    cmd = [executable, "-m", "seraphim.learning.daemon"]
+    kwargs: dict = {"stdout": log_file, "stderr": log_file}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+        )
+    else:
+        kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(cmd, **kwargs)
+
+    # Wait up to 3s for PID file to confirm daemon started
+    for _ in range(15):
+        time.sleep(0.2)
+        if PID_FILE.exists():
+            break
+
+    console.print(f"[green]✓[/green] Daemon started (PID {proc.pid})")
+    console.print(f"  Interval : [cyan]{interval}h[/cyan]  Agents: [cyan]{agents}[/cyan]"
+                  + ("  [yellow]GRPO[/yellow]" if grpo else "")
+                  + ("  [magenta]finetune[/magenta]" if finetune else ""))
+    console.print(f"  Log      : [dim]{LOG_FILE}[/dim]")
+    console.print(f"  Status   : [bold]seraphim learn daemon status[/bold]")
+    console.print(f"  Stop     : [bold]seraphim learn daemon stop[/bold]")
+
+
+@daemon_app.command("stop")
+def daemon_stop():
+    """Stop the running learning daemon."""
+    from seraphim.learning.daemon import PID_FILE
+
+    if not PID_FILE.exists():
+        console.print("[yellow]⚠[/yellow]  No daemon running (no PID file).")
+        return
+    pid_str = PID_FILE.read_text().strip()
+    try:
+        pid = int(pid_str)
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        else:
+            os.kill(pid, signal.SIGTERM)
+        PID_FILE.unlink(missing_ok=True)
+        console.print(f"[green]✓[/green] Daemon (PID {pid}) stopped.")
+    except (ValueError, ProcessLookupError):
+        PID_FILE.unlink(missing_ok=True)
+        console.print(f"[yellow]⚠[/yellow]  PID {pid_str} not found — PID file removed.")
+    except PermissionError:
+        console.print(f"[red]✗[/red] Permission denied killing PID {pid_str}.")
+
+
+@daemon_app.command("restart")
+def daemon_restart(
+    interval: float = typer.Option(6.0, "--interval", "-i"),
+    agents: str = typer.Option("react,chat", "--agents", "-a"),
+    min_quality: float = typer.Option(0.6, "--quality", "-q"),
+    min_new_traces: int = typer.Option(3, "--min-traces"),
+    grpo: bool = typer.Option(False, "--grpo", "-g"),
+    grpo_generations: int = typer.Option(4, "--grpo-g"),
+    grpo_max_prompts: int = typer.Option(30, "--grpo-n"),
+    finetune: bool = typer.Option(False, "--finetune", "-f"),
+):
+    """Restart the learning daemon (stop then start)."""
+    from seraphim.learning.daemon import PID_FILE, CONFIG_FILE, is_alive
+
+    if PID_FILE.exists():
+        pid_str = PID_FILE.read_text().strip()
+        try:
+            pid = int(pid_str)
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            PID_FILE.unlink(missing_ok=True)
+            console.print(f"[dim]Stopped PID {pid}.[/dim]")
+        except Exception:
+            PID_FILE.unlink(missing_ok=True)
+
+    # Re-use start logic
+    daemon_start(
+        interval=interval, agents=agents, min_quality=min_quality,
+        min_new_traces=min_new_traces, grpo=grpo, grpo_generations=grpo_generations,
+        grpo_max_prompts=grpo_max_prompts, finetune=finetune,
+    )
+
+
+@daemon_app.command("status")
+def daemon_status():
+    """Show learning daemon status."""
+    from seraphim.learning.daemon import PID_FILE, LOG_FILE, STATE_FILE, is_alive, read_state
+
+    state = read_state()
+    pid_alive = False
+
+    if state.get("pid"):
+        pid_alive = is_alive(int(state["pid"]))
+    elif PID_FILE.exists():
+        try:
+            pid_alive = is_alive(int(PID_FILE.read_text().strip()))
+        except ValueError:
+            pass
+
+    if not state:
+        console.print("[yellow]⚠[/yellow]  Daemon never started on this machine.")
+        return
+
+    status_val = state.get("status", "unknown")
+    if status_val == "stopped" or not pid_alive:
+        status_str = "[red]● stopped[/red]"
+    elif status_val == "training":
+        status_str = "[yellow]● training[/yellow]"
+    elif status_val == "sleeping":
+        status_str = "[green]● running[/green]"
+    else:
+        status_str = f"[dim]{status_val}[/dim]"
+
+    console.print(f"\n[bold]Learning daemon[/bold]  {status_str}")
+    if state.get("pid"):
+        console.print(f"  PID       : [cyan]{state['pid']}[/cyan]"
+                      + ("  [dim](alive)[/dim]" if pid_alive else "  [red](dead)[/red]"))
+    if state.get("started_at"):
+        console.print(f"  Started   : [dim]{state['started_at']}[/dim]")
+    if state.get("run_count") is not None:
+        console.print(f"  Runs done : [yellow]{state['run_count']}[/yellow]")
+    if state.get("next_run") and status_val == "sleeping":
+        console.print(f"  Next run  : [cyan]{state['next_run']}[/cyan]")
+    if state.get("last_run"):
+        console.print(f"  Last run  : [dim]{state['last_run']}[/dim]")
+
+    lr = state.get("last_result")
+    if lr and lr.get("at"):
+        if lr.get("error"):
+            console.print(f"  Last result: [red]error — {lr['error'][:60]}[/red]")
+        else:
+            console.print(
+                f"  Last result: mined=[yellow]{lr.get('mined', 0)}[/yellow]  "
+                f"accepted=[green]{lr.get('accepted', 0)}[/green]  "
+                f"rejected=[red]{lr.get('rejected', 0)}[/red]"
+                + (f"  grpo_pairs=[cyan]{lr['grpo_pairs']}[/cyan]" if lr.get("grpo_pairs") else "")
+            )
+
+    cfg = state.get("config", {})
+    if cfg:
+        auto = "[green]auto-start ON[/green]" if cfg.get("auto_start") else "[dim]auto-start off[/dim]"
+        console.print(
+            f"\n  [dim]interval={cfg.get('interval_hours', '?')}h  "
+            f"agents={cfg.get('agents', '?')}  "
+            f"grpo={cfg.get('run_grpo', False)}  "
+            f"finetune={cfg.get('run_finetune', False)}[/dim]  {auto}"
+        )
+    console.print(f"  Log: [dim]{LOG_FILE}[/dim]\n")
+
+
+@daemon_app.command("logs")
+def daemon_logs(
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of recent log lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (like tail -f)"),
+):
+    """Show recent learning daemon log output."""
+    from seraphim.learning.daemon import LOG_FILE
+
+    if not LOG_FILE.exists():
+        console.print("[dim]No log file yet. Start the daemon first.[/dim]")
+        return
+
+    if follow:
+        console.print(f"[dim]Following {LOG_FILE} — Ctrl+C to stop[/dim]\n")
+        try:
+            with open(LOG_FILE) as f:
+                f.seek(0, 2)  # seek to end
+                while True:
+                    line = f.readline()
+                    if line:
+                        console.print(line.rstrip())
+                    else:
+                        time.sleep(0.5)
+        except KeyboardInterrupt:
+            return
+
+    # Show last N lines
+    try:
+        all_lines = LOG_FILE.read_text(errors="replace").splitlines()
+        recent = all_lines[-lines:]
+        console.print(f"[dim]Last {len(recent)} lines of {LOG_FILE}:[/dim]\n")
+        for line in recent:
+            if "ERROR" in line or "CRITICAL" in line:
+                console.print(f"[red]{line}[/red]")
+            elif "WARNING" in line:
+                console.print(f"[yellow]{line}[/yellow]")
+            elif "Run #" in line and "done" in line:
+                console.print(f"[green]{line}[/green]")
+            else:
+                console.print(f"[dim]{line}[/dim]")
+    except Exception as e:
+        console.print(f"[red]✗[/red] Could not read log: {e}")
 
 
 @app.command("traces")

@@ -66,6 +66,53 @@ async def startup():
     await init_db()
     from seraphim.memory import init_rag
     init_rag()
+    _maybe_start_daemon()
+
+
+def _maybe_start_daemon() -> None:
+    """Auto-start learning daemon if config has auto_start=true and daemon not running."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    from seraphim.learning.daemon import CONFIG_FILE, PID_FILE, is_alive
+
+    if not CONFIG_FILE.exists():
+        return
+    try:
+        config = json.loads(CONFIG_FILE.read_text())
+    except Exception:
+        return
+    if not config.get("auto_start"):
+        return
+
+    if PID_FILE.exists():
+        try:
+            if is_alive(int(PID_FILE.read_text().strip())):
+                return  # already running
+        except (ValueError, Exception):
+            pass
+        PID_FILE.unlink(missing_ok=True)
+
+    from seraphim.learning.daemon import LOG_FILE
+    log_file = open(LOG_FILE, "a")
+    if sys.platform == "win32":
+        from pathlib import Path as _Path
+        pythonw = _Path(sys.executable).parent / "pythonw.exe"
+        executable = str(pythonw) if pythonw.exists() else sys.executable
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        subprocess.Popen(
+            [executable, "-m", "seraphim.learning.daemon"],
+            stdout=log_file, stderr=log_file,
+            creationflags=flags,
+        )
+    else:
+        subprocess.Popen(
+            [sys.executable, "-m", "seraphim.learning.daemon"],
+            stdout=log_file, stderr=log_file,
+            start_new_session=True,
+        )
+    logger.info("Learning daemon auto-started.")
 
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
