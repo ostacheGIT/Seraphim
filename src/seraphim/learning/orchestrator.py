@@ -31,6 +31,10 @@ class LearningConfig:
     grpo_generations: int = 4         # N responses per prompt for GRPO
     grpo_max_prompts: int = 30        # max prompts per GRPO run
     grpo_backprop: bool = False       # enable HuggingFace GRPO backprop (requires torch)
+    run_distill: bool = False         # Step 1c: knowledge distillation from teacher model
+    distill_teacher_type: str = "ollama"
+    distill_teacher_model: str = "qwen2.5:14b"
+    distill_threshold: float = 0.5
     run_finetune: bool = False        # Step 3: LoRA fine-tune after mining
     finetune_base_model: str = "Qwen/Qwen2.5-3B-Instruct"
     finetune_epochs: int = 3
@@ -45,6 +49,7 @@ class LearningResult:
     accepted: int
     rejected: int
     grpo_result: dict[str, Any] | None = None
+    distill_result: dict[str, Any] | None = None
     finetune_result: dict[str, Any] | None = None
 
 
@@ -82,6 +87,28 @@ async def run_learning_loop(config: LearningConfig | None = None) -> LearningRes
             "=== GRPO done === prompts=%d generations=%d mean_reward=%.3f pairs_saved=%d",
             gr.prompts_used, gr.total_generations, gr.mean_reward, gr.pairs_saved,
         )
+
+    # ── Step 0b: Knowledge distillation (optional) ──────────────────────────
+    distill_result: dict[str, Any] | None = None
+    if config.run_distill and not config.dry_run:
+        from seraphim.learning.distiller import DistillConfig, run_distillation
+        dist_cfg = DistillConfig(
+            teacher_type=config.distill_teacher_type,
+            teacher_model=config.distill_teacher_model,
+            min_score_threshold=config.distill_threshold,
+        )
+        logger.info("=== Distillation start === teacher=%s/%s",
+                    config.distill_teacher_type, config.distill_teacher_model)
+        dr = await run_distillation(dist_cfg)
+        distill_result = {
+            "success": dr.success,
+            "weak_classes": dr.weak_classes,
+            "queries_processed": dr.queries_processed,
+            "pairs_saved": dr.pairs_saved,
+            "message": dr.message,
+        }
+        logger.info("=== Distillation done === pairs=%d weak=%s",
+                    dr.pairs_saved, dr.weak_classes)
 
     # ── Step 1: Mine SFT pairs ───────────────────────────────────────────────
     total_mined = 0
@@ -209,5 +236,6 @@ async def run_learning_loop(config: LearningConfig | None = None) -> LearningRes
         accepted=accepted,
         rejected=rejected,
         grpo_result=grpo_result,
+        distill_result=distill_result,
         finetune_result=finetune_result,
     )

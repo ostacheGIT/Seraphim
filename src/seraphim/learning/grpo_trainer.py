@@ -360,6 +360,45 @@ def _run_backprop_sync(config: GRPOConfig, prompts: list[str]) -> dict[str, Any]
             report_to="none",
         )
 
+        from transformers import TrainerCallback, TrainerState, TrainerControl, TrainingArguments
+        from seraphim.engine.metrics import get_gpu_snapshot, TrainingStepMetrics
+
+        step_metrics: list[dict] = []
+        metrics_log_path = output_dir / "training_metrics.jsonl"
+
+        class GpuMetricsCallback(TrainerCallback):
+            def on_log(self, args: TrainingArguments, state: TrainerState,
+                       control: TrainerControl, logs=None, **kw):
+                if not logs:
+                    return
+                gpu = get_gpu_snapshot()
+                m = TrainingStepMetrics(
+                    step=state.global_step,
+                    loss=float(logs.get("loss", 0)),
+                    grad_norm=float(logs.get("grad_norm", 0)),
+                    learning_rate=float(logs.get("learning_rate", 0)),
+                    reward_mean=float(logs.get("reward", 0)),
+                    reward_std=float(logs.get("reward_std", 0)),
+                    kl=float(logs.get("kl", 0)),
+                    gpu=gpu,
+                )
+                d = m.to_dict()
+                step_metrics.append(d)
+                logger.info(
+                    "[GRPO step %d] loss=%.4f reward=%.3f kl=%.5f"
+                    " gpu=%s%% vram=%.0fMB",
+                    state.global_step, m.loss, m.reward_mean, m.kl,
+                    f"{gpu.gpu_util_pct:.0f}" if gpu else "?",
+                    gpu.vram_used_mb if gpu else 0,
+                )
+                # Append to JSONL log
+                try:
+                    import json
+                    with open(metrics_log_path, "a") as f:
+                        f.write(json.dumps(d) + "\n")
+                except Exception:
+                    pass
+
         trainer = GRPOTrainer(
             model=model,
             reward_funcs=reward_fn,
@@ -367,6 +406,7 @@ def _run_backprop_sync(config: GRPOConfig, prompts: list[str]) -> dict[str, Any]
             train_dataset=dataset,
             peft_config=lora_cfg,
             processing_class=tokenizer,
+            callbacks=[GpuMetricsCallback()],
         )
 
         logger.info("[GRPO] Starting backprop on %d prompts...", len(prompts))
@@ -375,7 +415,7 @@ def _run_backprop_sync(config: GRPOConfig, prompts: list[str]) -> dict[str, Any]
         tokenizer.save_pretrained(str(output_dir))
         logger.info("[GRPO] Backprop done. Adapter saved to %s", output_dir)
 
-        return {"success": True, "output_dir": str(output_dir)}
+        return {"success": True, "output_dir": str(output_dir), "step_metrics": step_metrics}
 
     except Exception as exc:
         logger.exception("[GRPO] Backprop failed")

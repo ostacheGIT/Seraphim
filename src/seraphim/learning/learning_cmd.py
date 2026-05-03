@@ -190,9 +190,12 @@ def run_cmd(
     dry_run: bool = typer.Option(False, "--dry-run"),
     grpo: bool = typer.Option(False, "--grpo", "-g", help="Run GRPO sampling before SFT mining"),
     grpo_generations: int = typer.Option(4, "--grpo-g", help="GRPO generations per prompt"),
+    distill: bool = typer.Option(False, "--distill", "-d", help="Run knowledge distillation"),
+    distill_teacher: str = typer.Option("ollama", "--distill-teacher", help="Teacher type: ollama|anthropic|openai"),
+    distill_model: str = typer.Option("qwen2.5:14b", "--distill-model", help="Teacher model ID"),
     finetune: bool = typer.Option(False, "--finetune", "-f", help="Run LoRA fine-tuning after optimize"),
 ):
-    """Full learning loop: [GRPO →] mine → optimize → eval → accept/reject [→ finetune]."""
+    """Full learning loop: [GRPO →] [distill →] mine → optimize → eval → accept/reject [→ finetune]."""
     async def _run():
         from seraphim.learning.orchestrator import LearningConfig, run_learning_loop
         cfg = LearningConfig(
@@ -200,6 +203,9 @@ def run_cmd(
             dry_run=dry_run,
             run_grpo=grpo,
             grpo_generations=grpo_generations,
+            run_distill=distill and not dry_run,
+            distill_teacher_type=distill_teacher,
+            distill_teacher_model=distill_model,
             run_finetune=finetune and not dry_run,
         )
         console.print(
@@ -216,6 +222,12 @@ def run_cmd(
                 f"generations=[cyan]{g['total_generations']}[/cyan] "
                 f"reward=[yellow]{g['mean_reward']:.3f}[/yellow] "
                 f"pairs=[green]{g['pairs_saved']}[/green]"
+            )
+        if result.distill_result:
+            d = result.distill_result
+            console.print(
+                f"  Distill: classes=[cyan]{','.join(d['weak_classes']) or 'none'}[/cyan] "
+                f"pairs=[green]{d['pairs_saved']}[/green]"
             )
         console.print(f"  SFT pairs mined : [yellow]{result.mined_pairs}[/yellow]")
         console.print(f"  Overlays accepted: [green]{result.accepted}[/green]")
@@ -707,6 +719,185 @@ def daemon_logs(
                 console.print(f"[dim]{line}[/dim]")
     except Exception as e:
         console.print(f"[red]✗[/red] Could not read log: {e}")
+
+
+@app.command("metrics")
+def metrics_cmd(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of recent traces to show"),
+    agent: str = typer.Option("", "--agent", "-a", help="Filter by agent"),
+    training: bool = typer.Option(False, "--training", "-t", help="Show GRPO training step metrics"),
+    training_log: str = typer.Option(
+        "~/.seraphim/grpo_adapter/training_metrics.jsonl",
+        "--log", help="Path to GRPO training metrics JSONL",
+    ),
+):
+    """Show inference and training performance metrics."""
+    async def _run():
+        if training:
+            import json
+            from pathlib import Path
+            log_path = Path(training_log).expanduser()
+            if not log_path.exists():
+                console.print(f"[dim]No training metrics at {log_path}[/dim]")
+                return
+            lines = log_path.read_text().splitlines()
+            steps = [json.loads(l) for l in lines if l.strip()]
+            if not steps:
+                console.print("[dim]No training steps logged.[/dim]")
+                return
+
+            t = Table(show_header=True, title=f"GRPO Training Metrics ({len(steps)} steps)")
+            t.add_column("Step", justify="right")
+            t.add_column("Loss", justify="right")
+            t.add_column("Reward", justify="right")
+            t.add_column("KL", justify="right")
+            t.add_column("GPU %", justify="right")
+            t.add_column("VRAM MB", justify="right")
+            t.add_column("LR", justify="right")
+
+            for s in steps[-limit:]:
+                loss_color = "green" if abs(s.get("loss", 0)) < 0.1 else "yellow"
+                t.add_row(
+                    str(s.get("step", "?")),
+                    f"[{loss_color}]{s.get('loss', 0):.4f}[/{loss_color}]",
+                    f"{s.get('reward_mean', 0):.3f}",
+                    f"{s.get('kl', 0):.5f}",
+                    f"{s.get('gpu_util_pct', 0):.0f}%",
+                    f"{s.get('vram_used_mb', 0):.0f}",
+                    f"{s.get('lr', 0):.2e}",
+                )
+            console.print(t)
+            return
+
+        # Inference metrics from traces
+        from seraphim.learning.trace_store import load_traces
+        traces = await load_traces(agent=agent or None, limit=limit)
+        if not traces:
+            console.print("[dim]No traces yet.[/dim]")
+            return
+
+        with_metrics = [t for t in traces if t.ttft_ms > 0 or t.throughput_tps > 0]
+        if not with_metrics:
+            console.print(
+                "[dim]Traces exist but no inference metrics yet. "
+                "Metrics are captured on new requests after this update.[/dim]"
+            )
+            return
+
+        t = Table(show_header=True, title=f"Inference Metrics (last {len(with_metrics)} traces)")
+        t.add_column("Agent", style="cyan")
+        t.add_column("Query", max_width=30)
+        t.add_column("TTFT ms", justify="right")
+        t.add_column("Latency ms", justify="right")
+        t.add_column("Tok/s", justify="right")
+        t.add_column("Tok in", justify="right")
+        t.add_column("Tok out", justify="right")
+        t.add_column("GPU %", justify="right")
+        t.add_column("VRAM MB", justify="right")
+
+        for tr in with_metrics:
+            ttft_color = "green" if tr.ttft_ms < 500 else ("yellow" if tr.ttft_ms < 2000 else "red")
+            tps_color = "green" if tr.throughput_tps > 20 else ("yellow" if tr.throughput_tps > 5 else "red")
+            t.add_row(
+                tr.agent,
+                tr.query[:30],
+                f"[{ttft_color}]{tr.ttft_ms:.0f}[/{ttft_color}]",
+                f"{tr.latency_ms:.0f}",
+                f"[{tps_color}]{tr.throughput_tps:.1f}[/{tps_color}]",
+                str(tr.tokens_in),
+                str(tr.tokens_out),
+                f"{tr.gpu_util_pct:.0f}%" if tr.gpu_util_pct else "—",
+                f"{tr.vram_used_mb:.0f}" if tr.vram_used_mb else "—",
+            )
+
+        console.print(t)
+
+        # Summary stats
+        avg_ttft = sum(t.ttft_ms for t in with_metrics) / len(with_metrics)
+        avg_tps = sum(t.throughput_tps for t in with_metrics if t.throughput_tps > 0)
+        n_tps = sum(1 for t in with_metrics if t.throughput_tps > 0)
+        console.print(
+            f"\n  avg TTFT: [cyan]{avg_ttft:.0f}ms[/cyan]"
+            + (f"  avg throughput: [cyan]{avg_tps/n_tps:.1f} tok/s[/cyan]" if n_tps else "")
+        )
+
+    asyncio.run(_run())
+
+
+@app.command("distill")
+def distill_cmd(
+    teacher_type: str = typer.Option("ollama", "--teacher", "-t", help="Teacher backend: ollama | anthropic | openai"),
+    teacher_model: str = typer.Option("qwen2.5:14b", "--model", "-m", help="Teacher model ID"),
+    api_key: str = typer.Option("", "--api-key", help="API key (or set ANTHROPIC_API_KEY / OPENAI_API_KEY env var)"),
+    base_url: str = typer.Option("", "--base-url", help="Custom OpenAI-compatible endpoint"),
+    threshold: float = typer.Option(0.5, "--threshold", "-s", help="Score threshold — classes below this are distilled"),
+    min_samples: int = typer.Option(3, "--min-samples", help="Min samples per class before considering it weak"),
+    max_queries: int = typer.Option(10, "--max-queries", "-n", help="Max real traces per weak class"),
+    synthetic: int = typer.Option(0, "--synthetic", help="Synthetic queries to generate per weak class"),
+    quality: float = typer.Option(0.9, "--quality", "-q", help="SFT quality score for distilled pairs"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Generate but don't save"),
+    diagnose: bool = typer.Option(False, "--diagnose", help="Only show weak classes, don't distill"),
+):
+    """Knowledge distillation — teacher model generates ideal responses for weak query classes."""
+    async def _run():
+        if diagnose:
+            from seraphim.learning.distiller import diagnose_weak_classes
+            weak = await diagnose_weak_classes(threshold, min_samples)
+            if not weak:
+                console.print("[green]✓[/green] No weak classes found — all above threshold.")
+                return
+            t = Table(show_header=True, title=f"Weak query classes (score < {threshold})")
+            t.add_column("Query Class", style="cyan")
+            t.add_column("Best Score", justify="right")
+            t.add_column("Samples", justify="right")
+            for w in weak:
+                score_color = "red" if w["best_score"] < 0.4 else "yellow"
+                t.add_row(
+                    w["query_class"],
+                    f"[{score_color}]{w['best_score']:.3f}[/{score_color}]",
+                    str(w["total_samples"]),
+                )
+            console.print(t)
+            return
+
+        from seraphim.learning.distiller import DistillConfig, run_distillation
+        cfg = DistillConfig(
+            teacher_type=teacher_type,
+            teacher_model=teacher_model,
+            teacher_api_key=api_key,
+            teacher_base_url=base_url,
+            min_score_threshold=threshold,
+            min_samples=min_samples,
+            max_real_queries=max_queries,
+            synthetic_per_class=synthetic,
+            sft_quality=quality,
+            dry_run=dry_run,
+        )
+
+        console.print(f"[bold]Knowledge distillation[/bold] — teacher: [cyan]{teacher_type}/{teacher_model}[/cyan]")
+        console.print(f"  Threshold : score < {threshold}  min_samples={min_samples}")
+        if dry_run:
+            console.print("  [yellow](dry-run — pairs will not be saved)[/yellow]")
+
+        with console.status("[dim]Distilling...[/dim]"):
+            result = await run_distillation(cfg)
+
+        if not result.success:
+            console.print(f"[red]✗[/red] {result.message}")
+            return
+
+        console.print(f"\n[bold]Distillation results[/bold]")
+        console.print(f"  Weak classes     : [cyan]{', '.join(result.weak_classes) or 'none'}[/cyan]")
+        console.print(f"  Queries processed: [yellow]{result.queries_processed}[/yellow]")
+        console.print(f"  Pairs saved      : [green]{result.pairs_saved}[/green]")
+        console.print(f"  Pairs skipped    : [dim]{result.pairs_skipped}[/dim]")
+        if result.errors:
+            console.print(f"  Errors           : [red]{len(result.errors)}[/red]")
+            for e in result.errors[:3]:
+                console.print(f"    [red dim]{e}[/red dim]")
+        console.print(f"\n[dim]{result.message}[/dim]")
+
+    asyncio.run(_run())
 
 
 @app.command("routing")

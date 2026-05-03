@@ -393,6 +393,19 @@ def _resolve_engine_id(req: ChatRequest) -> str:
     return engine_id or "ollama_qwen3b"
 
 
+async def _get_engine_metrics(engine_id: str):
+    """Return last InferenceMetrics from the engine if it supports it."""
+    try:
+        from seraphim.engine.metrics import InferenceMetrics
+        eng = get_engine(engine_id)
+        m = getattr(eng, "last_metrics", None)
+        if isinstance(m, InferenceMetrics):
+            return m
+    except Exception:
+        pass
+    return None
+
+
 async def _resolve_agent_name(req: ChatRequest) -> str:
     """
     Si agent == "auto" (ou non fourni), le router choisit automatiquement.
@@ -445,6 +458,9 @@ async def chat(req: ChatRequest):
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", response, routed_agent)
 
+    # Grab inference metrics from the engine if available
+    inf = _get_engine_metrics(engine_id)
+
     trace_id = str(uuid.uuid4())
     await save_trace(LearningTrace(
         id=trace_id,
@@ -452,8 +468,12 @@ async def chat(req: ChatRequest):
         query=req.query,
         final_response=response,
         session_id=session_id,
-        tokens_in=len(req.query) // 4,
-        tokens_out=len(response) // 4,
+        tokens_in=inf.tokens_in if inf else len(req.query) // 4,
+        tokens_out=inf.tokens_out if inf else len(response) // 4,
+        ttft_ms=inf.ttft_ms if inf else 0.0,
+        throughput_tps=inf.throughput_tps if inf else 0.0,
+        gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
+        vram_used_mb=inf.vram_used_mb if inf else 0.0,
     ))
 
     return ChatResponse(
@@ -490,6 +510,7 @@ async def chat_stream(req: ChatRequest):
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", result, routed_agent)
 
+    inf = _get_engine_metrics(engine_id)
     trace_id = str(uuid.uuid4())
     await save_trace(LearningTrace(
         id=trace_id,
@@ -497,8 +518,12 @@ async def chat_stream(req: ChatRequest):
         query=req.query,
         final_response=result,
         session_id=session_id,
-        tokens_in=len(req.query) // 4,
-        tokens_out=len(result) // 4,
+        tokens_in=inf.tokens_in if inf else len(req.query) // 4,
+        tokens_out=inf.tokens_out if inf else len(result) // 4,
+        ttft_ms=inf.ttft_ms if inf else 0.0,
+        throughput_tps=inf.throughput_tps if inf else 0.0,
+        gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
+        vram_used_mb=inf.vram_used_mb if inf else 0.0,
     ))
 
     async def generator():

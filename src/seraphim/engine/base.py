@@ -19,6 +19,7 @@ class ChatResult(TypedDict, total=False):
     """
     messages: List[ChatMessage]
     usage: Optional[Dict[str, Any]]
+    metrics: Optional[Dict[str, Any]]   # InferenceMetrics.to_dict() if available
 
 
 class LLMEngine(Protocol):

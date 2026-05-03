@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
 from seraphim.engine.base import ChatMessage, ChatResult, LLMEngine
+from seraphim.engine.metrics import InferenceMetrics, parse_ollama_metrics
 
 
 class OllamaEngine:
@@ -27,6 +29,7 @@ class OllamaEngine:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.last_metrics: InferenceMetrics | None = None
 
     def _build_prompt(self, messages: List[ChatMessage]) -> str:
         parts: List[str] = []
@@ -72,6 +75,7 @@ class OllamaEngine:
         if kwargs:
             payload.update(kwargs)
 
+        t0 = time.perf_counter_ns()
         async with httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=self.timeout,
@@ -80,10 +84,12 @@ class OllamaEngine:
             r.raise_for_status()
             data = r.json()
 
+        self.last_metrics = parse_ollama_metrics(data, t0)
         content = data.get("response", "") or ""
         return ChatResult(
             messages=[ChatMessage(role="assistant", content=content)],
             usage=None,
+            metrics=self.last_metrics.to_dict(),
         )
 
     async def stream_chat(
@@ -99,6 +105,9 @@ class OllamaEngine:
         if kwargs:
             payload.update(kwargs)
 
+        t0 = time.perf_counter_ns()
+        first_token_ns: int | None = None
+
         async with httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=self.timeout,
@@ -111,8 +120,16 @@ class OllamaEngine:
                     data = json.loads(line)
                     token = data.get("response", "")
                     if token:
+                        if first_token_ns is None:
+                            first_token_ns = time.perf_counter_ns()
                         yield token
                     if data.get("done"):
+                        # Build metrics from final done packet
+                        m = parse_ollama_metrics(data, t0)
+                        # Override TTFT with wall-clock measurement if available
+                        if first_token_ns is not None:
+                            m.ttft_ms = (first_token_ns - t0) / 1e6
+                        self.last_metrics = m
                         break
 
 

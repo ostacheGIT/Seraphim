@@ -33,8 +33,13 @@ class Trace:
     success: bool = True
     feedback: float = -1.0      # -1 = unknown, 0.0–1.0 explicit
     latency_ms: float = 0.0
-    tokens_in: int = 0           # estimated prompt tokens
-    tokens_out: int = 0          # estimated completion tokens
+    tokens_in: int = 0
+    tokens_out: int = 0
+    # Inference metrics
+    ttft_ms: float = 0.0         # time to first token (ms)
+    throughput_tps: float = 0.0  # output tokens per second
+    gpu_util_pct: float = 0.0    # GPU utilization % during inference
+    vram_used_mb: float = 0.0    # VRAM used (MB) during inference
     metadata: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -112,8 +117,16 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_overlay_hist_target ON prompt_overlays_history(target)"
         )
-        # Migrate existing traces table to add token columns
-        for col in ("tokens_in INTEGER NOT NULL DEFAULT 0", "tokens_out INTEGER NOT NULL DEFAULT 0"):
+        # Migrate existing traces table — add missing columns
+        _new_cols = [
+            "tokens_in INTEGER NOT NULL DEFAULT 0",
+            "tokens_out INTEGER NOT NULL DEFAULT 0",
+            "ttft_ms REAL NOT NULL DEFAULT 0",
+            "throughput_tps REAL NOT NULL DEFAULT 0",
+            "gpu_util_pct REAL NOT NULL DEFAULT 0",
+            "vram_used_mb REAL NOT NULL DEFAULT 0",
+        ]
+        for col in _new_cols:
             try:
                 await db.execute(f"ALTER TABLE traces ADD COLUMN {col}")
             except Exception:
@@ -128,14 +141,17 @@ async def save_trace(trace: Trace) -> None:
             """INSERT OR REPLACE INTO traces
                (id, session_id, agent, query, steps_json, final_response,
                 success, feedback, latency_ms, tokens_in, tokens_out,
+                ttft_ms, throughput_tps, gpu_util_pct, vram_used_mb,
                 metadata_json, timestamp)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trace.id, trace.session_id, trace.agent, trace.query,
                 json.dumps([vars(s) for s in trace.steps]),
                 trace.final_response,
                 int(trace.success), trace.feedback, trace.latency_ms,
                 trace.tokens_in, trace.tokens_out,
+                trace.ttft_ms, trace.throughput_tps,
+                trace.gpu_util_pct, trace.vram_used_mb,
                 json.dumps(trace.metadata), trace.timestamp,
             ),
         )
@@ -322,6 +338,10 @@ def _row_to_trace(r: dict) -> Trace:
         latency_ms=r["latency_ms"],
         tokens_in=r.get("tokens_in", 0) or 0,
         tokens_out=r.get("tokens_out", 0) or 0,
+        ttft_ms=r.get("ttft_ms", 0.0) or 0.0,
+        throughput_tps=r.get("throughput_tps", 0.0) or 0.0,
+        gpu_util_pct=r.get("gpu_util_pct", 0.0) or 0.0,
+        vram_used_mb=r.get("vram_used_mb", 0.0) or 0.0,
         metadata=json.loads(r["metadata_json"]),
         timestamp=r["timestamp"],
     )
