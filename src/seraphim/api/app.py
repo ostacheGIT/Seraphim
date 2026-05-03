@@ -180,6 +180,57 @@ async def list_installed_skills():
     return {"skills": skills}
 
 
+@app.get("/skills/native")
+async def list_native_skills():
+    import importlib
+    from seraphim.skills.base import BaseSkill
+
+    _SKILL_MODULES = [
+        "seraphim.skills.core.calculator",
+        "seraphim.skills.core.think",
+        "seraphim.skills.core.code_interpreter",
+        "seraphim.skills.core.shell",
+        "seraphim.skills.core.http_request",
+        "seraphim.skills.core.repl",
+        "seraphim.skills.core.digest",
+        "seraphim.skills.web.search",
+        "seraphim.skills.web.browser",
+        "seraphim.skills.system.control",
+        "seraphim.skills.system.files",
+        "seraphim.skills.system.screen",
+        "seraphim.skills.memory.sqlite",
+    ]
+
+    seen: dict = {}
+    for mod_name in _SKILL_MODULES:
+        try:
+            mod = importlib.import_module(mod_name)
+            for attr in dir(mod):
+                obj = getattr(mod, attr)
+                if (isinstance(obj, type)
+                        and issubclass(obj, BaseSkill)
+                        and obj is not BaseSkill):
+                    try:
+                        instance = obj()
+                        if instance.name not in seen:
+                            seen[instance.name] = instance
+                    except Exception as exc:
+                        logger.warning("Cannot instantiate %s: %s", attr, exc)
+        except Exception as exc:
+            logger.warning("Cannot import skill module %s: %s", mod_name, exc)
+
+    skills = [
+        {
+            "id": f"skill:{name}",
+            "name": name,
+            "source": "native",
+            "description": getattr(skill, "description", ""),
+        }
+        for name, skill in sorted(seen.items())
+    ]
+    return {"skills": skills}
+
+
 @app.get("/skills/catalog")
 async def search_skill_catalog(q: str = "", limit: int = 200, offset: int = 0, source: str = ""):
     from seraphim.skills.catalog import search_skills, list_catalog, get_catalog_size

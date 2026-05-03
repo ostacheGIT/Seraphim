@@ -13,7 +13,13 @@ export interface InstalledSkill {
 
 export async function fetchInstalledSkills(): Promise<InstalledSkill[]> {
   const res = await fetch(`${BASE}/skills`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.skills ?? [];
+}
 
+export async function fetchNativeSkills(): Promise<InstalledSkill[]> {
+  const res = await fetch(`${BASE}/skills/native`);
   if (!res.ok) return [];
   const data = await res.json();
   return data.skills ?? [];
