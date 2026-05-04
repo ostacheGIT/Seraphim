@@ -6,11 +6,11 @@ from seraphim.skills.base import BaseSkill
 logger = logging.getLogger(__name__)
 
 SKILL_REGISTRY: dict[str, BaseSkill] = {}
+_seen_classes: set[type] = set()  # module-level guard — prevents double-registration on re-import
 
 def discover_skills():
     """Découvre et enregistre tous les skills automatiquement"""
     import seraphim.skills as skills_pkg
-    seen_classes: set[type] = set()
     for _, module_name, _ in pkgutil.walk_packages(
             skills_pkg.__path__, prefix="seraphim.skills."
     ):
@@ -19,9 +19,9 @@ def discover_skills():
             obj = getattr(module, attr)
             if not (isinstance(obj, type) and issubclass(obj, BaseSkill) and obj is not BaseSkill):
                 continue
-            if obj in seen_classes:
+            if obj in _seen_classes:
                 continue
-            seen_classes.add(obj)
+            _seen_classes.add(obj)
             instance = obj()
             existing = SKILL_REGISTRY.get(instance.name)
             if existing is not None:

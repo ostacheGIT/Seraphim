@@ -459,7 +459,7 @@ async def chat(req: ChatRequest):
     await save_message(session_id, "assistant", response, routed_agent)
 
     # Grab inference metrics from the engine if available
-    inf = _get_engine_metrics(engine_id)
+    inf = await _get_engine_metrics(engine_id)
 
     trace_id = str(uuid.uuid4())
     await save_trace(LearningTrace(
@@ -510,7 +510,7 @@ async def chat_stream(req: ChatRequest):
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", result, routed_agent)
 
-    inf = _get_engine_metrics(engine_id)
+    inf = await _get_engine_metrics(engine_id)
     trace_id = str(uuid.uuid4())
     await save_trace(LearningTrace(
         id=trace_id,

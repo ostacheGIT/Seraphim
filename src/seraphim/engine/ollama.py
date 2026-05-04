@@ -67,11 +67,40 @@ class OllamaEngine:
             tools: Optional[List[Dict[str, Any]]] = None,
             **kwargs: Any,
     ) -> ChatResult:
+        # Always use /api/chat — native chat template, better instruction following
+        return await self._chat_api(messages, tools=tools, **kwargs)
+
+    async def _chat_api(
+            self,
+            messages: List[ChatMessage],
+            tools: Optional[List[Dict[str, Any]]] = None,
+            **kwargs: Any,
+    ) -> ChatResult:
+        """Utilise /api/chat avec support natif du tool calling (Ollama ≥0.3)."""
+        # Sanitize messages: strip tool_calls field from non-assistant roles (Ollama rejects them)
+        clean_messages = []
+        for m in messages:
+            cm: Dict[str, Any] = {"role": m.get("role", "user"), "content": m.get("content", "") or ""}
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                cm["tool_calls"] = m["tool_calls"]
+            if m.get("role") == "tool":
+                cm["role"] = "tool"
+            if m.get("name"):
+                cm["name"] = m["name"]
+            if m.get("tool_call_id"):
+                cm["tool_call_id"] = m["tool_call_id"]
+            clean_messages.append(cm)
+
         payload: Dict[str, Any] = {
             "model": self.model,
-            "prompt": self._build_prompt(messages),
+            "messages": clean_messages,
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
+        # format kwarg (e.g. "json" or JSON schema dict) → structured output
+        if "format" in kwargs:
+            payload["format"] = kwargs.pop("format")
         if kwargs:
             payload.update(kwargs)
 
@@ -80,14 +109,21 @@ class OllamaEngine:
                 base_url=self.base_url,
                 timeout=self.timeout,
         ) as client:
-            r = await client.post("/api/generate", json=payload)
+            r = await client.post("/api/chat", json=payload)
             r.raise_for_status()
             data = r.json()
 
         self.last_metrics = parse_ollama_metrics(data, t0)
-        content = data.get("response", "") or ""
+        message = data.get("message", {})
+        content = message.get("content", "") or ""
+        tool_calls = message.get("tool_calls", [])
+
+        result_msg: ChatMessage = {"role": "assistant", "content": content}
+        if tool_calls:
+            result_msg["tool_calls"] = tool_calls
+
         return ChatResult(
-            messages=[ChatMessage(role="assistant", content=content)],
+            messages=[result_msg],
             usage=None,
             metrics=self.last_metrics.to_dict(),
         )

@@ -107,7 +107,21 @@ def ask(
             _ = get_engine(engine_id)
 
         # Instancie l'agent
-        if agent == "react":
+        # skill:xxx dans la query → SkillAgent direct (contourne ChatAgent)
+        import re as _re
+        _skill_prefix_match = _re.match(r"skill:([\w\-]+)", query.strip())
+        if _skill_prefix_match:
+            from seraphim.agents.base import SkillAgent
+            _skill_name = _skill_prefix_match.group(1)
+            _effective_query = query[_skill_prefix_match.end():].lstrip(" —-").strip() or query
+            try:
+                ag = SkillAgent(_skill_name)
+                if hasattr(ag, "engine_id"):
+                    ag.engine_id = engine_id
+            except FileNotFoundError as _e:
+                console.print(f"[red]{_e}[/red]")
+                return
+        elif agent == "react":
             ag = ReActAgent(engine_id=engine_id)
         else:
             ag = get_agent(agent)
@@ -115,7 +129,10 @@ def ask(
                 ag.engine_id = engine_id  # type: ignore[assignment]
 
         ctx = AgentContext()
-        ctx.add_system(ag.system_prompt)
+        # SkillAgent gère son propre system prompt dans _run_react — ne pas l'ajouter ici
+        from seraphim.agents.base import SkillAgent as _SkillAgent
+        if not isinstance(ag, _SkillAgent):
+            ctx.add_system(ag.system_prompt)
 
         if not no_memory:
             await init_db()
@@ -123,16 +140,18 @@ def ask(
             for msg in history:
                 ctx.messages.append(msg)
 
+        _run_query = locals().get("_effective_query") or query
+
         if stream:
             console.print(
                 f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",
                 end="",
             )
-            full_response = await ag.run(query, ctx)
+            full_response = await ag.run(_run_query, ctx)
             console.print(full_response)
         else:
             with console.status("[dim]Thinking...[/dim]"):
-                full_response = await ag.run(query, ctx)
+                full_response = await ag.run(_run_query, ctx)
             console.print(
                 f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim]"
             )

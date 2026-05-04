@@ -5,6 +5,7 @@ Utilisé par les skills externes qui ont `allowed-tools: Bash(...)` dans leur SK
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,16 +47,43 @@ class ShellSkill(BaseSkill):
             env["PATH"] = str(npm_global) + os.pathsep + env.get("PATH", "")
         return env
 
+    @staticmethod
+    def _fix_win_command(cmd: str) -> str:
+        """Quote unquoted URLs containing & so PowerShell doesn't split them."""
+        def _quote_url(m: re.Match) -> str:
+            url = m.group(0)
+            # Already quoted — leave as-is
+            return url
+        # Find unquoted URLs with query params (contain & outside of quotes)
+        # Pattern: https?://... with & not already surrounded by " or '
+        return re.sub(
+            r'(?<!["\'])https?://\S+',
+            lambda m: f'"{m.group(0)}"' if "&" in m.group(0) and not m.group(0).startswith('"') else m.group(0),
+            cmd,
+        )
+
     async def run(self, command: str, timeout: int = 60, **kwargs) -> SkillResult:
         logger.info("shell exec: %s", command)
         try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,  # bytes mode — decode manually
-                timeout=timeout,
-                env=self._build_env(),
-            )
+            if sys.platform == "win32":
+                # cmd.exe ne supporte pas les single quotes — utilise PowerShell
+                # Also quote URLs with & params (& = PS call operator when unquoted)
+                command = self._fix_win_command(command)
+                args = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+                proc = subprocess.run(
+                    args,
+                    capture_output=True,
+                    timeout=timeout,
+                    env=self._build_env(),
+                )
+            else:
+                proc = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    env=self._build_env(),
+                )
             enc = "utf-8"
             stdout = proc.stdout.decode(enc, errors="replace")[:_MAX_OUTPUT] if proc.stdout else ""
             stderr = proc.stderr.decode(enc, errors="replace")[:2000] if proc.stderr else ""

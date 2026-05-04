@@ -1,6 +1,6 @@
 from seraphim.skills.base import BaseSkill, SkillResult
 
-_MAX_BODY = 4000
+_MAX_BODY = 12000
 
 
 class HttpRequestSkill(BaseSkill):

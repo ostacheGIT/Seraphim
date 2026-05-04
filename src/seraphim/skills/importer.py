@@ -72,6 +72,12 @@ class SkillImporter:
 
         (target_dir / "SKILL.md").write_text(self._render_skill_md(frontmatter, translated_body), encoding="utf-8")
 
+        # Copie skill.toml si présent (pipeline déterministe)
+        toml_src = resolved.path / "skill.toml"
+        if toml_src.exists():
+            import shutil as _shutil
+            _shutil.copy2(toml_src, target_dir / "skill.toml")
+
         for subdir in COPIED_SUBDIRS:
             src_sub = resolved.path / subdir
             if src_sub.exists():

@@ -11,6 +11,7 @@ class ChatMessage(TypedDict, total=False):
     content: str
     name: str
     tool_call_id: str
+    tool_calls: List[Dict[str, Any]]  # assistant tool_calls (OpenAI / Ollama format)
 
 
 class ChatResult(TypedDict, total=False):
