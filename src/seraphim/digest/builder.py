@@ -121,6 +121,48 @@ async def _get_news(topics: list[str], per_topic: int = 3) -> list[DigestSection
     return sections
 
 
+async def _get_emails(max_results: int = 10) -> DigestSection:
+    try:
+        from seraphim.connectors.gmail import gmail_connector
+        if not gmail_connector.is_connected():
+            return DigestSection(title="Emails", content="", error="Not connected — run: seraphim digest auth")
+        emails = gmail_connector.get_today_emails(max_results=max_results)
+        unread = gmail_connector.get_unread_count()
+        if not emails:
+            return DigestSection(title="Emails", content="No emails today.")
+        lines = [f"**{unread} unread** today\n"]
+        for e in emails:
+            lines.append(f"• **{e['subject']}**")
+            lines.append(f"  From: {e['from']}")
+            if e["snippet"]:
+                lines.append(f"  {e['snippet'][:100]}")
+        return DigestSection(title="Emails", content="\n".join(lines))
+    except Exception as e:
+        return DigestSection(title="Emails", content="", error=str(e))
+
+
+async def _get_calendar() -> DigestSection:
+    try:
+        from seraphim.connectors.gcalendar import gcalendar_connector
+        if not gcalendar_connector.is_connected():
+            return DigestSection(title="Calendar", content="", error="Not connected — run: seraphim digest auth")
+        events = gcalendar_connector.get_today_events()
+        if not events:
+            return DigestSection(title="Calendar", content="No events today.")
+        lines = []
+        for e in events:
+            time_range = f"{e['start']}–{e['end']}" if e["start"] else "all day"
+            line = f"• **{e['title']}** — {time_range}"
+            if e["location"]:
+                line += f" @ {e['location']}"
+            lines.append(line)
+            if e["attendees"]:
+                lines.append(f"  With: {', '.join(e['attendees'][:3])}")
+        return DigestSection(title="Calendar", content="\n".join(lines))
+    except Exception as e:
+        return DigestSection(title="Calendar", content="", error=str(e))
+
+
 async def _get_monitor_summary() -> DigestSection:
     try:
         from seraphim.monitor.store import init_db, list_monitors
@@ -189,6 +231,16 @@ async def build_digest(cfg: dict[str, Any] | None = None) -> Digest:
     # Weather
     weather = await _get_weather(cfg["city"])
     digest.sections.append(weather)
+
+    # Calendar (before news — time-critical)
+    if cfg.get("google_enabled", True):
+        calendar_section = await _get_calendar()
+        digest.sections.append(calendar_section)
+
+    # Emails
+    if cfg.get("google_enabled", True):
+        email_section = await _get_emails(max_results=cfg.get("email_max", 10))
+        digest.sections.append(email_section)
 
     # News per topic
     news_sections = await _get_news(cfg["topics"], cfg["news_per_topic"])

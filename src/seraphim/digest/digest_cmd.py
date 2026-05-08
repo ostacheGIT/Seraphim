@@ -88,19 +88,27 @@ def config(
     city: Optional[str] = typer.Option(None, "--city", "-c", help="City for weather"),
     topics: Optional[str] = typer.Option(None, "--topics", "-t", help="Comma-separated topics: tech,AI,crypto"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Summary language: fr or en"),
+    email_max: Optional[int] = typer.Option(None, "--email-max", "-e", help="Max emails to show (default 10)"),
+    no_google: bool = typer.Option(False, "--no-google", help="Disable Gmail/Calendar sections"),
     show: bool = typer.Option(False, "--show", help="Show current config"),
 ):
     """Configure morning digest settings."""
     from seraphim.digest.builder import load_config, save_config
+    from seraphim.connectors.oauth import is_connected
 
     cfg = load_config()
 
-    if show or (city is None and topics is None and language is None):
+    if show or (city is None and topics is None and language is None and email_max is None and not no_google):
+        google_status = "[green]connected[/green]" if is_connected() else "[red]not connected[/red]"
         console.print("[bold]Current digest config:[/bold]")
-        console.print(f"  city:     [cyan]{cfg['city']}[/cyan]")
-        console.print(f"  topics:   [cyan]{', '.join(cfg['topics'])}[/cyan]")
-        console.print(f"  language: [cyan]{cfg.get('language', 'fr')}[/cyan]")
-        console.print(f"  save_dir: [dim]{cfg['save_dir']}[/dim]")
+        console.print(f"  city:         [cyan]{cfg['city']}[/cyan]")
+        console.print(f"  topics:       [cyan]{', '.join(cfg['topics'])}[/cyan]")
+        console.print(f"  language:     [cyan]{cfg.get('language', 'fr')}[/cyan]")
+        console.print(f"  email_max:    [cyan]{cfg.get('email_max', 10)}[/cyan]")
+        console.print(f"  google:       {google_status}")
+        console.print(f"  save_dir:     [dim]{cfg['save_dir']}[/dim]")
+        if not is_connected():
+            console.print("\n[dim]→ Run [bold]seraphim digest auth[/bold] to connect Gmail & Calendar[/dim]")
         return
 
     if city:
@@ -115,8 +123,53 @@ def config(
             raise typer.Exit(1)
         cfg["language"] = language
         console.print(f"[green]✓[/green] Language: {language}")
+    if email_max is not None:
+        cfg["email_max"] = email_max
+        console.print(f"[green]✓[/green] Email max: {email_max}")
+    if no_google:
+        cfg["google_enabled"] = False
+        console.print("[green]✓[/green] Google sections disabled.")
 
     save_config(cfg)
+
+
+@app.command("auth")
+def auth(
+    client_id: str = typer.Option(..., "--client-id", help="Google OAuth client ID"),
+    client_secret: str = typer.Option(..., "--client-secret", help="Google OAuth client secret"),
+):
+    """Connect Gmail and Google Calendar via OAuth.
+
+    Prerequisites:
+      1. Go to https://console.cloud.google.com/ → APIs & Services → Credentials
+      2. Create OAuth 2.0 Client ID (Desktop app type)
+      3. Enable Gmail API and Google Calendar API in API Library
+    """
+    from seraphim.connectors.oauth import save_client_credentials, run_oauth_flow
+
+    save_client_credentials(client_id, client_secret)
+    console.print("[dim]Client credentials saved.[/dim]")
+
+    try:
+        run_oauth_flow()
+        console.print("[green]✓[/green] Gmail and Google Calendar connected successfully.")
+        console.print("[dim]Run [bold]seraphim digest run[/bold] to test.[/dim]")
+    except Exception as e:
+        console.print(f"[red]✗[/red] Authentication failed: {e}")
+        raise typer.Exit(1)
+
+
+@app.command("disconnect")
+def disconnect():
+    """Disconnect Gmail and Google Calendar (remove stored tokens)."""
+    from seraphim.connectors.oauth import delete_tokens, is_connected
+
+    if not is_connected():
+        console.print("[yellow]Google not connected.[/yellow]")
+        return
+
+    delete_tokens()
+    console.print("[green]✓[/green] Google tokens removed.")
 
 
 @app.command("schedule")
