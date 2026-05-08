@@ -68,7 +68,10 @@ async def evaluate_agent(
     queries = test_queries or _DEFAULT_TEST_QUERIES
     ag = get_agent(agent_name)
     if system_prompt:
-        ag.system_prompt = system_prompt
+        try:
+            ag.system_prompt = system_prompt
+        except AttributeError:
+            pass  # @property with no setter (e.g. ReActAgent) — injected via context below
 
     scores: list[float] = []
     latencies: list[float] = []
@@ -76,7 +79,7 @@ async def evaluate_agent(
 
     for q in queries:
         ctx = AgentContext()
-        ctx.add_system(ag.system_prompt)
+        ctx.add_system(system_prompt if system_prompt else ag.system_prompt)
         t0 = time.monotonic()
         try:
             response = await ag.run(q, ctx)

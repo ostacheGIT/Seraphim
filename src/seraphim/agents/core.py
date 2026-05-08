@@ -78,6 +78,17 @@ class BaseAgent(ABC):
         msgs = result.get("messages", [])
         return msgs[-1].get("content", "") if msgs else ""
 
+    async def _chat_with_tools(self, messages, tools: list[dict]) -> tuple[str, list]:
+        """Call engine with native tool schemas. Returns (text_content, tool_calls)."""
+        if not tools:
+            return await self._chat(messages), []
+        result = await self.engine.chat(messages, tools=tools)
+        msgs = result.get("messages", [])
+        if not msgs:
+            return "", []
+        last = msgs[-1]
+        return (last.get("content", "") or ""), (last.get("tool_calls", []) or [])
+
     @abstractmethod
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         ...

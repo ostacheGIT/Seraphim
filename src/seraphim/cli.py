@@ -128,6 +128,22 @@ def ask(
             if hasattr(ag, "engine_id"):
                 ag.engine_id = engine_id  # type: ignore[assignment]
 
+        # Learned routing override — only when user didn't pin an agent explicitly
+        if not _skill_prefix_match and agent == "chat":
+            try:
+                from seraphim.agents.learned_router import learned_route
+                override = await learned_route(query, ag.name)
+                if override:
+                    if override.agent.startswith("skill:") and override.skill:
+                        from seraphim.agents.base import SkillAgent as _SA
+                        ag = _SA(override.skill)
+                    else:
+                        ag = get_agent(override.agent)
+                        if hasattr(ag, "engine_id"):
+                            ag.engine_id = engine_id
+            except Exception:
+                pass
+
         ctx = AgentContext()
         # SkillAgent gère son propre system prompt dans _run_react — ne pas l'ajouter ici
         from seraphim.agents.base import SkillAgent as _SkillAgent

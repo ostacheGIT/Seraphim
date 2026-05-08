@@ -323,6 +323,74 @@ _IDENTITY_BLOCK = (
 )
 
 
+def _build_registry_tool_schemas(query: str = "", max_installed: int = 10) -> list[dict]:
+    """Build native tool schemas from SKILL_REGISTRY + top-K relevant installed skills.
+
+    Built-in skills always included; installed skills filtered by query relevance so
+    small models (3B) don't choke on a massive tool list.
+    """
+    schemas = list(get_all_tools())
+    seen: set[str] = {s["function"]["name"] for s in schemas}
+    try:
+        from seraphim.skills.manager import get_skill_manager
+        from seraphim.skills.catalog import search_skills
+        mgr = get_skill_manager()
+        if not len(mgr):
+            mgr.discover()
+        skill_tools = mgr.get_skill_tools()
+        if query and len(skill_tools) > max_installed:
+            try:
+                relevant_names = {r["name"] for r in search_skills(query, top_k=max_installed)}
+                skill_tools = [st for st in skill_tools if st.manifest.name in relevant_names]
+            except Exception:
+                skill_tools = skill_tools[:max_installed]
+        else:
+            skill_tools = skill_tools[:max_installed]
+        for st in skill_tools:
+            schema = st.to_tool_schema()
+            name = schema["function"]["name"]
+            if name not in seen:
+                schemas.append(schema)
+                seen.add(name)
+    except Exception:
+        pass
+    return schemas
+
+
+async def _dispatch_skill_tool_calls(tool_calls: list, query: str) -> str:
+    """Execute skills from native LLM function-calling response."""
+    results: list[str] = []
+    for tc in tool_calls:
+        fn = tc.get("function", {})
+        name = fn.get("name", "")
+        args_raw = fn.get("arguments") or {}
+        if isinstance(args_raw, str):
+            try:
+                args = json.loads(args_raw)
+            except Exception:
+                args = {"task": args_raw}
+        else:
+            args = dict(args_raw)
+
+        if name in SKILL_REGISTRY:
+            try:
+                res = await SKILL_REGISTRY[name].run(**args)
+                results.append(res.output if res.success else f"Error: {res.error}")
+            except Exception as e:
+                results.append(f"Skill error ({name}): {e}")
+        else:
+            try:
+                sub = SkillAgent(name)
+                task = args.get("task") or args.get("query") or query
+                results.append(await sub.run(str(task)))
+            except FileNotFoundError:
+                results.append(f"Skill '{name}' not found. Run: seraphim skill sync-all")
+            except Exception as e:
+                results.append(f"Skill error ({name}): {e}")
+
+    return "\n\n".join(results) if results else "(no result)"
+
+
 class ChatAgent(BaseAgent):
     name = "chat"
     description = "Conversational agent for general questions and assistance"
@@ -420,9 +488,11 @@ class ChatAgent(BaseAgent):
                     result = await skill.run(**kwargs)
                     return result.output if result.output else (result.error or "(no output)")
 
-        # Conversation normale
         ctx = self.build_context(query, context)
-        response = await self._chat(ctx.messages)
+        tools = _build_registry_tool_schemas(query)
+        response, tool_calls = await self._chat_with_tools(ctx.messages, tools)
+        if tool_calls:
+            return await _dispatch_skill_tool_calls(tool_calls, query)
         ctx.add_assistant(response)
         return response
 
