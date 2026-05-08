@@ -8,6 +8,7 @@ export default function App() {
     const [input, setInput] = useState("");
     const [isThinking, setIsThinking] = useState(false);
     const [agentId, setAgentId] = useState<string>("auto");
+    const [pendingImage, setPendingImage] = useState<string | null>(null);
 
     const {
         conversations,
@@ -40,18 +41,22 @@ export default function App() {
     const sendMessage = useCallback(
         async (text: string) => {
             const trimmed = text.trim();
-            if (!trimmed || isThinking) return;
+            if ((!trimmed && !pendingImage) || isThinking) return;
+            const imageSnapshot = pendingImage;
             setInput("");
-            addMessage(trimmed, "user");
+            setPendingImage(null);
+            const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;
+            addMessage(trimmed || "📎 Image", "user", undefined, undefined, imageDataUrl);
             setIsThinking(true);
             try {
                 const { response, traceId } = await askSeraphim(
-                    trimmed,
+                    trimmed || "Analyse cette image.",
                     activeId ?? undefined,
                     undefined,
                     (sentence) => speakRef.current?.(sentence),
                     engineId,
                     agentId,
+                    imageSnapshot ?? undefined,
                 );
                 addMessage(response, "assistant", "done", traceId ?? undefined);
             } catch {
@@ -62,7 +67,7 @@ export default function App() {
                 setIsThinking(false);
             }
         },
-        [isThinking, addMessage, activeId, engineId, agentId],
+        [isThinking, addMessage, activeId, engineId, agentId, pendingImage],
     );
 
     async function handleSend() {
@@ -89,6 +94,8 @@ export default function App() {
             onEngineChange={setEngineId}
             agentId={agentId}
             onAgentChange={setAgentId}
+            pendingImage={pendingImage}
+            onImageChange={setPendingImage}
         />
     );
 }

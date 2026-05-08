@@ -218,6 +218,35 @@ _SCHEDULE_DIGEST_RE = re.compile(
 
 _SKILL_DIRECT_RE = re.compile(r"^skill:([\w\-]+)(?:\s+--?)?\s*(.*)", re.S | re.I)
 
+_CLIPBOARD_RE = re.compile(
+    r"(?:lis|lire|read|regarde|affiche|montre|analyse|analyze|check|examine)\s+"
+    r"(?:(?:le|mon|my|ce\s+que\s+j['\s4]?ai\s+)\s*)?(?:presse[- ]?papier|clipboard)\b"
+    r"|(?:j['\s4]?ai\s+copié|what\s+(?:did\s+)?i\s+cop(?:ied|y))\b"
+    r"|analyse\s+ce\s+que\s+j['\s4]?ai\s+copié",
+    re.I,
+)
+
+
+async def _inject_clipboard(query: str) -> str:
+    """If query contains clipboard intent, prepend fresh clipboard content."""
+    if not _CLIPBOARD_RE.search(query):
+        return query
+    skill = SKILL_REGISTRY.get("read_clipboard")
+    if not skill:
+        return query
+    try:
+        result = await skill.run()
+        if result.success and result.output.strip() and result.output.strip() != "(presse-papier vide)":
+            return (
+                f"L'utilisateur a demandé d'analyser le contenu de son presse-papier. "
+                f"Voici ce qu'il contient actuellement :\n\n"
+                f"```\n{result.output}\n```\n\n"
+                f"Demande originale : {query}"
+            )
+    except Exception:
+        pass
+    return query
+
 _CAPABILITIES_RE = re.compile(
     r"(?:^/skills?\s*$)"
     r"|\b(?:"
@@ -496,6 +525,7 @@ class ChatAgent(BaseAgent):
                     result = await skill.run(**kwargs)
                     return result.output if result.output else (result.error or "(no output)")
 
+        query = await _inject_clipboard(query)
         ctx = self.build_context(query, context)
         tools = _build_registry_tool_schemas(query)
         response, tool_calls = await self._chat_with_tools(ctx.messages, tools)
@@ -752,6 +782,8 @@ class ReActAgent(BaseAgent):
                         return result.output if result.output else (result.error or "(no output)")
                     except Exception as e:
                         return f"Erreur : {e}"
+
+        query = await _inject_clipboard(query)
 
         # ── Injection dynamique des skills du catalogue ──────────────────────
         ctx = self.build_context(query, context)

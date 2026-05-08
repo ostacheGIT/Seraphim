@@ -129,6 +129,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     messages: list[dict[str, str]] = []
     stream: bool = False
+    image: str | None = None  # base64 PNG/JPEG — described by llava before passing to agent
 
 
 class ChatResponse(BaseModel):
@@ -147,6 +148,148 @@ class FeedbackRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
+
+
+# ─── Image helper ────────────────────────────────────────────────────────────
+
+_VISION_MODELS = {"llava", "llava-phi3", "bakllava", "moondream", "minicpm-v", "llava-llama3"}
+
+
+def _find_vision_model(base_url: str) -> str | None:
+    """Return first installed vision-capable model name, or None."""
+    import json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=5) as r:
+            data = json.loads(r.read())
+        for m in data.get("models", []):
+            name = m.get("name", "").split(":")[0].lower()
+            if name in _VISION_MODELS:
+                return m["name"]
+    except Exception:
+        pass
+    return None
+
+
+def _ocr_image_b64(image_b64: str) -> str:
+    """Run Windows WinRT OCR on a base64 image. Returns extracted text or ''."""
+    import base64
+    import subprocess
+    import tempfile
+    import time
+    from pathlib import Path
+
+    _PS_OCR = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$absPath = (Resolve-Path $ImagePath).Path
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Runtime.WindowsRuntime")
+$null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]
+function Await($Task) {
+    $methods = [System.WindowsRuntimeSystemExtensions].GetMethods()
+    $asTask  = $methods | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and !$_.IsGenericMethod } | Select-Object -First 1
+    $net = $asTask.Invoke($null, @($Task))
+    $net.Wait(-1) | Out-Null
+    $net.Result
+}
+$file    = Await([Windows.Storage.StorageFile]::GetFileFromPathAsync($absPath))
+$stream  = Await($file.OpenAsync([Windows.Storage.FileAccessMode]::Read))
+$decoder = Await([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
+$bitmap  = Await($decoder.GetSoftwareBitmapAsync())
+$engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { exit 1 }
+$result  = Await($engine.RecognizeAsync($bitmap))
+Write-Output $result.Text
+"""
+    tmp = Path(tempfile.gettempdir()) / f"seraphim_ocr_{int(time.time())}.png"
+    try:
+        tmp.write_bytes(base64.b64decode(image_b64))
+        script = f"$ImagePath='{tmp}'\n" + _PS_OCR
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        )
+        return (proc.stdout or "").strip()
+    except Exception as e:
+        logger.debug("OCR on pasted image failed: %s", e)
+        return ""
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+async def _describe_image(image_b64: str, user_query: str) -> str | None:
+    """OCR + optional vision model description. Returns None if no vision model."""
+    import json
+    import urllib.request
+    base_url = settings.engine.base_url.rstrip("/")
+
+    loop = asyncio.get_event_loop()
+
+    # Always run OCR — deterministic, accurate for text
+    ocr_text = await loop.run_in_executor(None, _ocr_image_b64, image_b64)
+
+    vision_model = await loop.run_in_executor(None, _find_vision_model, base_url)
+    if not vision_model and not ocr_text:
+        return None  # nothing to work with
+
+    if not vision_model:
+        # OCR only — enough for text-heavy screenshots
+        return f"[OCR text from image]\n{ocr_text}" if ocr_text else None
+
+    payload = json.dumps({
+        "model": vision_model,
+        "prompt": (
+            "Describe this image concisely. "
+            "List visible UI elements, text, icons, and layout. "
+            "Be factual, do not invent names or URLs not clearly visible."
+        ),
+        "images": [image_b64],
+        "stream": False,
+    }).encode()
+    req = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    def _call():
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.loads(r.read())
+    try:
+        visual = await loop.run_in_executor(None, _call)
+        visual_desc = visual.get("response", "").strip()
+    except Exception as e:
+        logger.warning("Vision model call failed: %s", e)
+        visual_desc = ""
+
+    parts = []
+    if ocr_text:
+        parts.append(f"[Texte extrait par OCR — exact]\n{ocr_text}")
+    if visual_desc:
+        parts.append(f"[Description visuelle]\n{visual_desc}")
+    return "\n\n".join(parts) if parts else None
+
+
+_NO_VISION_MSG = (
+    "⚠️ **Aucun modèle de vision installé.**\n\n"
+    "Pour analyser des images, installez llava :\n"
+    "```\nollama pull llava\n```\n"
+    "Puis relancez Seraphim."
+)
+
+
+async def _augment_query_with_image(query: str, image_b64: str | None) -> str:
+    if not image_b64:
+        return query
+    description = await _describe_image(image_b64, query)
+    if description is None:
+        return f"__VISION_UNAVAILABLE__\n{query}"
+    return (
+        f"{description}\n\n"
+        f"---\n"
+        f"{query}"
+    )
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -453,7 +596,11 @@ async def chat(req: ChatRequest):
         ctx = AgentContext(messages=history)
     else:
         ctx = None
-    response = await ag.run(req.query, ctx)
+    effective_query = await _augment_query_with_image(req.query, req.image)
+    if effective_query.startswith("__VISION_UNAVAILABLE__"):
+        response = _NO_VISION_MSG
+    else:
+        response = await ag.run(effective_query, ctx)
 
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", response, routed_agent)
@@ -505,7 +652,19 @@ async def chat_stream(req: ChatRequest):
     else:
         ctx = AgentContext()
 
-    result = await ag.run(req.query, ctx)
+    effective_query = await _augment_query_with_image(req.query, req.image)
+    if effective_query.startswith("__VISION_UNAVAILABLE__"):
+        result = _NO_VISION_MSG
+    elif req.image:
+        # Image queries: skip all DIRECT_PATTERNS, call LLM directly
+        from seraphim.agents.core import AgentContext as _AC
+        chat_ag = _build_agent("chat", engine_id)
+        img_ctx = _AC()
+        img_ctx.add_system(chat_ag.system_prompt)
+        img_ctx.add_user(effective_query)
+        result = await chat_ag._chat(img_ctx.messages)
+    else:
+        result = await ag.run(effective_query, ctx)
 
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", result, routed_agent)

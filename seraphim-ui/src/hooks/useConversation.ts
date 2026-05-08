@@ -106,7 +106,7 @@ export function useConversation() {
   );
 
   const addMessage = useCallback(
-      (content: string, role: "user" | "assistant", status?: Message["status"], traceId?: string) => {
+      (content: string, role: "user" | "assistant", status?: Message["status"], traceId?: string, imageUrl?: string) => {
         const msg: Message = {
           id: generateId(),
           role,
@@ -114,6 +114,7 @@ export function useConversation() {
           timestamp: new Date(),
           status,
           traceId,
+          imageUrl,
         };
         setConversations((prev) =>
             prev.map((c) => {

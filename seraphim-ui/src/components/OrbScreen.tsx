@@ -26,6 +26,8 @@ interface OrbScreenProps {
     onEngineChange: (id: EngineId) => void;
     agentId: string;
     onAgentChange: (id: string) => void;
+    pendingImage?: string | null;
+    onImageChange?: (img: string | null) => void;
 }
 
 const BASE_AGENTS = [
@@ -57,6 +59,8 @@ export default function OrbScreen({
     onEngineChange,
     agentId,
     onAgentChange,
+    pendingImage,
+    onImageChange,
 }: OrbScreenProps) {
     const [panelOpen, setPanelOpen]       = useState(false);
     const [catalogOpen, setCatalogOpen]   = useState(false);
@@ -282,12 +286,56 @@ export default function OrbScreen({
                             <div ref={chatBottomRef} />
                         </div>
                         <div className="chat-input-area">
+                            {pendingImage && (
+                                <div className="img-preview-wrap">
+                                    <img
+                                        src={`data:image/png;base64,${pendingImage}`}
+                                        alt="Image à envoyer"
+                                        className="img-preview"
+                                    />
+                                    <button
+                                        className="img-preview-remove"
+                                        onClick={() => onImageChange?.(null)}
+                                        aria-label="Supprimer l'image"
+                                    >✕</button>
+                                </div>
+                            )}
                             <input
                                 type="text"
                                 value={input}
                                 onChange={(e) => onInputChange(e.target.value)}
                                 onKeyDown={handleKeyDown}
-                                placeholder="Tapez un message..."
+                                onPaste={(e) => {
+                                    const items = e.clipboardData?.items;
+                                    if (!items) return;
+                                    for (const item of Array.from(items)) {
+                                        if (item.type.startsWith("image/")) {
+                                            e.preventDefault();
+                                            const file = item.getAsFile();
+                                            if (!file) continue;
+                                            const reader = new FileReader();
+                                            reader.onload = () => {
+                                                const result = reader.result as string;
+                                                onImageChange?.(result.split(",")[1]);
+                                            };
+                                            reader.readAsDataURL(file);
+                                            break;
+                                        }
+                                    }
+                                }}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    const file = Array.from(e.dataTransfer.files).find(f => f.type.startsWith("image/"));
+                                    if (!file) return;
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                        const result = reader.result as string;
+                                        onImageChange?.(result.split(",")[1]);
+                                    };
+                                    reader.readAsDataURL(file);
+                                }}
+                                placeholder={pendingImage ? "Ajoutez un message (optionnel)…" : "Tapez un message ou collez une image…"}
                                 className="chat-input"
                             />
                         </div>

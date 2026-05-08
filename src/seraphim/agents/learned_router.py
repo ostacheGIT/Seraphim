@@ -199,6 +199,12 @@ async def learned_route(
     from seraphim.agents.router import RoutingDecision
 
     query_class = classify_query(query)
+
+    # System/math/http commands use direct-pattern bypass — learned routing would
+    # route away from react and break the bypass entirely.
+    if query_class in ("system", "math", "http"):
+        return None
+
     await _ensure_table()
 
     async with aiosqlite.connect(_DB_PATH) as db:

@@ -158,6 +158,13 @@ def ask(
 
         _run_query = locals().get("_effective_query") or query
 
+        # Clipboard injection — works for all agents
+        try:
+            from seraphim.agents.base import _inject_clipboard
+            _run_query = await _inject_clipboard(_run_query)
+        except Exception:
+            pass
+
         if stream:
             console.print(
                 f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",

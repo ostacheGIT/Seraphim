@@ -109,6 +109,13 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 {isUser ? "VOUS" : "SERAPHIM"}
             </div>
             <div className="msg-content md-body">
+                {message.imageUrl && (
+                    <img
+                        src={message.imageUrl}
+                        alt="Image envoyée"
+                        className="msg-image"
+                    />
+                )}
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{

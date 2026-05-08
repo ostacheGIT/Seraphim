@@ -65,7 +65,7 @@ def _run_ps(script: str, args: list[str], timeout: int = 30) -> tuple[bool, str]
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script] + args,
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "unknown error").strip()

@@ -5,6 +5,7 @@ export interface Message {
   timestamp: Date;
   status?: "pending" | "done" | "error";
   traceId?: string;
+  imageUrl?: string;  // base64 data URL for user messages with attached image
 }
 
 export interface Conversation {

@@ -32,6 +32,7 @@ export async function askSeraphim(
     onSentence?: (sentence: string) => void,
     engineId: EngineId = "ollama_qwen3b",
     agent: string = "react",
+    image?: string,
 ): Promise<{ response: string; traceId: string | null }> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
@@ -44,6 +45,7 @@ export async function askSeraphim(
       session_id: sessionId ?? null,
       messages: [],
       stream: true,
+      image: image ?? null,
     }),
   });
 
