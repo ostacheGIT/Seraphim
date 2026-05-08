@@ -614,9 +614,12 @@ body:has(.catalog-resize-handle.dragging) {
     border-radius: 4px;
     color: rgba(255,255,255,0.25);
     cursor: pointer;
-    padding: 3px 6px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-family: inherit;
     transition: color 0.15s, border-color 0.15s;
     line-height: 1;
+    min-width: 22px;
 }
 
 .feedback-btn:hover:not(:disabled) {
@@ -629,13 +632,16 @@ body:has(.catalog-resize-handle.dragging) {
     border-color: var(--accent);
 }
 
-.feedback-btn.active.down {
-    color: #f87171;
-    border-color: #f87171;
+.feedback-btn:disabled:not(.active) {
+    cursor: default;
+    opacity: 0.4;
 }
 
-.feedback-btn:disabled {
-    cursor: default;
+.feedback-label {
+    font-size: 10px;
+    color: rgba(255,255,255,0.25);
+    align-self: center;
+    user-select: none;
 }
 
 /* ─── Markdown body ─────────────────────────────────────────── */

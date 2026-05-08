@@ -306,13 +306,17 @@ def grpo_cmd(
 @app.command("feedback")
 def feedback_cmd(
     trace_id: str = typer.Argument(..., help="Trace ID"),
-    score: float = typer.Argument(..., help="Score 0.0–1.0"),
+    rating: int = typer.Argument(..., help="Note 1–5  (1 = mauvais, 5 = excellent)"),
 ):
-    """Set explicit feedback score on a trace."""
+    """Set feedback on a trace (note 1–5)."""
+    if not 1 <= rating <= 5:
+        console.print("[red]La note doit être entre 1 et 5.[/red]")
+        raise typer.Exit(1)
+    score = (rating - 1) / 4
     async def _run():
         from seraphim.learning.trace_store import set_feedback
         await set_feedback(trace_id, score)
-        console.print(f"[green]✓[/green] Feedback {score:.2f} set on trace [dim]{trace_id}[/dim]")
+        console.print(f"[green]✓[/green] Note {rating}/5 (score {score:.2f}) enregistrée sur [dim]{trace_id}[/dim]")
     asyncio.run(_run())
 
 

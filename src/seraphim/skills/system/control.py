@@ -194,25 +194,53 @@ class SystemControlSkill(BaseSkill):
 
 class SetBrightnessSkill(BaseSkill):
     name        = "set_brightness"
-    description = "Règle la luminosité de l'écran entre 0 et 100 (laptop uniquement)."
+    description = (
+        "Règle la luminosité de l'écran (laptop uniquement). "
+        "Utilise 'level' pour une valeur absolue (0–100) ou 'delta' pour une variation relative "
+        "(ex: delta=-10 pour baisser de 10%, delta=+20 pour monter de 20%)."
+    )
     parameters  = {
         "type": "object",
         "properties": {
             "level": {
                 "type": "integer",
-                "description": "Niveau de luminosité entre 0 et 100",
+                "description": "Niveau absolu de luminosité entre 0 et 100",
                 "minimum": 0,
-                "maximum": 100
-            }
+                "maximum": 100,
+            },
+            "delta": {
+                "type": "integer",
+                "description": "Variation relative en % (négatif = baisser, positif = monter)",
+            },
         },
-        "required": ["level"]
     }
 
-    async def run(self, level: int, **kwargs) -> SkillResult:
-        level = max(0, min(100, level))
+    @staticmethod
+    def _get_current() -> int | None:
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return int(result.stdout.strip())
+        except Exception:
+            return None
+
+    async def run(self, level: int | None = None, delta: int | None = None, **kwargs) -> SkillResult:
+        if delta is not None:
+            current = self._get_current()
+            if current is None:
+                return SkillResult(success=False, output="", error="Impossible de lire la luminosité courante.")
+            level = max(0, min(100, current + delta))
+        elif level is None:
+            return SkillResult(success=False, output="", error="Fournir 'level' ou 'delta'.")
+        else:
+            level = max(0, min(100, level))
+
         try:
             script = f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{level})"
-            subprocess.run(["powershell", "-Command", script], check=True)
+            subprocess.run(["powershell", "-Command", script], check=True, timeout=5)
             return SkillResult(success=True, output=f"☀️ Luminosité réglée à {level}%.")
         except Exception as e:
             return SkillResult(success=False, output="Impossible de régler la luminosité.", error=str(e))

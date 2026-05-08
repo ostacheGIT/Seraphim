@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Check, Terminal, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Copy, Check, Terminal } from "lucide-react";
 import { Message } from "../types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -66,12 +66,15 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
     );
 }
 
-function FeedbackButtons({ traceId }: { traceId: string }) {
-    const [voted, setVoted] = useState<"up" | "down" | null>(null);
+const RATING_COLORS = ["#f87171", "#fb923c", "#fbbf24", "#a3e635", "#4ade80"];
 
-    const vote = async (score: number, type: "up" | "down") => {
-        if (voted) return;
-        setVoted(type);
+function FeedbackButtons({ traceId }: { traceId: string }) {
+    const [voted, setVoted] = useState<number | null>(null);
+
+    const rate = async (rating: number) => {
+        if (voted !== null) return;
+        setVoted(rating);
+        const score = (rating - 1) / 4;
         try {
             await sendFeedback(traceId, score);
         } catch { /* silent */ }
@@ -79,22 +82,20 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
 
     return (
         <div className="msg-feedback">
-            <button
-                className={`feedback-btn ${voted === "up" ? "active" : ""}`}
-                onClick={() => vote(1.0, "up")}
-                disabled={!!voted}
-                aria-label="Utile"
-            >
-                <ThumbsUp size={11} />
-            </button>
-            <button
-                className={`feedback-btn ${voted === "down" ? "active down" : ""}`}
-                onClick={() => vote(0.0, "down")}
-                disabled={!!voted}
-                aria-label="Pas utile"
-            >
-                <ThumbsDown size={11} />
-            </button>
+            {voted === null && <span className="feedback-label">Utile ?</span>}
+            {[1, 2, 3, 4, 5].map((r) => (
+                <button
+                    key={r}
+                    className={`feedback-btn ${voted === r ? "active" : ""}`}
+                    style={voted === r ? { color: RATING_COLORS[r - 1], borderColor: RATING_COLORS[r - 1] } : {}}
+                    onClick={() => rate(r)}
+                    disabled={voted !== null}
+                    aria-label={`Note ${r}/5`}
+                >
+                    {r}
+                </button>
+            ))}
+            {voted !== null && <span className="feedback-label">Merci !</span>}
         </div>
     );
 }
