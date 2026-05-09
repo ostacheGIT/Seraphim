@@ -44,7 +44,7 @@ def _render_digest(digest) -> None:
 
     if digest.summary:
         console.print(Panel(
-            digest.summary,
+            Markdown(digest.summary),
             title="[bold magenta]Seraphim's Take[/bold magenta]",
             border_style="magenta",
         ))

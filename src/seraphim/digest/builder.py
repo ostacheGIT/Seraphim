@@ -18,6 +18,8 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "news_per_topic": 3,
     "language": "fr",
     "save_dir": str(Path.home() / ".seraphim" / "digests"),
+    "email_max": 10,
+    "google_enabled": True,
 }
 
 
@@ -192,31 +194,42 @@ async def _get_monitor_summary() -> DigestSection:
 
 async def _llm_summary(digest: Digest, language: str = "fr") -> str:
     try:
-        from seraphim.agents.base import ReActAgent
-        from seraphim.agents.core import AgentContext
+        from seraphim.engine import get_engine
 
-        lang_instruction = "Respond in French." if language == "fr" else "Respond in English."
-        content_parts = []
+        lang = "français" if language == "fr" else "English"
+
+        # Build compact bullet summary — skip emails (too noisy), cap each section
+        bullets: list[str] = []
         for s in digest.sections:
-            if s.content and not s.error:
-                content_parts.append(f"### {s.title}\n{s.content}")
+            if s.error or not s.content or s.title.startswith("Email"):
+                continue
+            first_line = s.content.splitlines()[0][:120]
+            bullets.append(f"- {s.title}: {first_line}")
 
-        if not content_parts:
+        if not bullets:
             return ""
 
-        combined = "\n\n".join(content_parts)[:3000]
-        agent = ReActAgent()
-        ctx = AgentContext()
-        ctx.add_system(
-            f"You are a personal morning briefing assistant. {lang_instruction} "
-            "Be concise and highlight what matters most. 3-5 sentences max."
-        )
-        prompt = (
-            f"Here is today's digest data:\n\n{combined}\n\n"
-            "Write a short morning briefing paragraph highlighting the key points."
-        )
-        result = await agent.run(prompt, ctx)
-        return result.strip()
+        data = "\n".join(bullets)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"Tu es un assistant briefing matinal. Réponds uniquement en {lang}. "
+                    "Tu dois écrire UN court paragraphe de 3 à 5 phrases maximum résumant les points clés. "
+                    "N'inclus PAS les données brutes. N'utilise PAS de listes. Synthèse uniquement."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Voici les données du digest:\n{data}\n\nÉcris le résumé maintenant.",
+            },
+        ]
+
+        engine = get_engine()
+        result = await engine.chat(messages, max_tokens=300, temperature=0.5)
+        text = result["messages"][0].get("content", "").strip()
+        return text
     except Exception:
         return ""
 

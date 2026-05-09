@@ -248,21 +248,23 @@ def serve(
 
 @app.command()
 def models():
-    """List available local Ollama models."""
+    """List available models from the configured engine."""
 
     async def _models():
-        from seraphim.engine.ollama import engine
+        from seraphim.engine import get_engine
+        from seraphim.settings import settings
+        engine = get_engine()
         ok = await engine.health_check()
         if not ok:
-            console.print("[red]✗ Ollama is not running.[/red]")
+            console.print(f"[red]✗ {engine.name} is not running at {settings.engine.base_url}[/red]")
             raise typer.Exit(1)
         model_list = await engine.list_models()
         if not model_list:
-            console.print("[yellow]No models found. Run ollama pull llama3.2[/yellow]")
+            console.print(f"[yellow]No models found on {engine.name}[/yellow]")
         else:
-            console.print("[bold]Available models[/bold]")
+            console.print(f"[bold]Available models ({engine.name})[/bold]")
             for m in model_list:
-                marker = "[green]●[/green]" if m == engine.model else " "
+                marker = "[green]●[/green]" if m == getattr(engine, "model", "") else " "
                 console.print(f"  {marker} {m}")
 
     _run(_models())
@@ -273,21 +275,31 @@ def doctor():
     """Diagnose your Seraphim setup."""
 
     async def _doctor():
-        from seraphim.engine.ollama import engine
+        from seraphim.engine import get_engine
         from seraphim.settings import settings
 
         console.print("[bold]Seraphim Doctor[/bold]\n")
 
+        engine = get_engine()
+        provider = settings.engine.provider
         ok = await engine.health_check()
         status = "[green]✓[/green]" if ok else "[red]✗[/red]"
-        console.print(f"  {status} Ollama reachable at {settings.engine.base_url}")
+        console.print(f"  {status} {engine.name} reachable at {settings.engine.base_url}")
+
+        if not ok and provider == "vllm":
+            console.print(
+                f"  [dim]→ Start vLLM: vllm serve {settings.engine.model}"
+                f" --gpu-memory-utilization {settings.engine.vllm_gpu_memory_utilization}"
+                f" --max-model-len {settings.engine.vllm_max_model_len}"
+                f" --port {settings.engine.vllm_port}[/dim]"
+            )
 
         if ok:
-            models = await engine.list_models()
-            has_model = any(settings.engine.model in m for m in models)
+            model_list = await engine.list_models()
+            has_model = any(settings.engine.model in m for m in model_list)
             status = "[green]✓[/green]" if has_model else "[yellow]⚠[/yellow]"
             console.print(f"  {status} Default model '{settings.engine.model}'")
-            if not has_model:
+            if not has_model and provider == "ollama":
                 console.print(f"     → Run: [bold]ollama pull {settings.engine.model}[/bold]")
 
         from pathlib import Path
@@ -333,6 +345,14 @@ app.add_typer(digest_app, name="digest")
 # ── Learning loop ───────────────────────────────────────────────────────────────
 from seraphim.learning.learning_cmd import app as learn_app
 app.add_typer(learn_app, name="learn")
+
+# ── vLLM server management ───────────────────────────────────────────────────────
+from seraphim.engine.vllm_cmd import app as vllm_app
+app.add_typer(vllm_app, name="vllm")
+
+# ── External service connections ─────────────────────────────────────────────────
+from seraphim.connectors.connect_cmd import app as connect_app
+app.add_typer(connect_app, name="connect")
 
 
 if __name__ == "__main__":

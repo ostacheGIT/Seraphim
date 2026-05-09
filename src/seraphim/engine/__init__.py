@@ -4,9 +4,7 @@ from typing import Dict, Optional
 
 from seraphim.engine.base import LLMEngine
 from seraphim.engine.ollama import OllamaEngine
-# from seraphim.engine.llamacpp import LlamaCppEngine  # optionnel, non utilisé pour l'instant
 
-# Registry simple en mémoire
 _engines: Dict[str, LLMEngine] = {}
 _default_engine_id: Optional[str] = None
 _initialized: bool = False
@@ -20,26 +18,33 @@ def _ensure_initialized() -> None:
 
 
 def init_engines() -> None:
-    """
-    Initialise les moteurs disponibles.
-
-    Actuellement:
-    - ollama_qwen3b : qwen2.5:3b (rapide, léger)
-    - ollama_qwen7b : qwen2.5:7b (plus gros)
-    """
     global _default_engine_id
 
-    # Moteur 1 : qwen2.5:3b
-    ollama_small = OllamaEngine(model="qwen2.5:3b")
-    register_engine("ollama_qwen3b", ollama_small, default=True)
+    try:
+        from seraphim.settings import settings
+        provider = settings.engine.provider
+        model = settings.engine.model
+        base_url = settings.engine.base_url
+        temperature = settings.engine.temperature
+    except Exception:
+        provider = "ollama"
+        model = "qwen2.5:3b"
+        base_url = "http://localhost:11434"
+        temperature = 0.7
 
-    # Moteur 2 : qwen2.5:7b
-    ollama_big = OllamaEngine(model="qwen2.5:7b")
-    register_engine("ollama_qwen7b", ollama_big, default=False)
+    # Always register Ollama engines as fallback
+    register_engine("ollama_qwen3b", OllamaEngine(model="qwen2.5:3b"), default=(provider == "ollama"))
+    register_engine("ollama_qwen7b", OllamaEngine(model="qwen2.5:7b"), default=False)
 
-    # Si tu remets llamacpp plus tard :
-    # llamacpp = LlamaCppEngine()
-    # register_engine("llamacpp", llamacpp, default=False)
+    if provider == "vllm":
+        from seraphim.engine.vllm import VLLMEngine
+        vllm = VLLMEngine(model=model, base_url=base_url, temperature=temperature)
+        register_engine("vllm", vllm, default=True)
+
+    elif provider == "llamacpp":
+        from seraphim.engine.llamacpp import LlamaCppEngine
+        llamacpp = LlamaCppEngine(model=model, base_url=base_url)
+        register_engine("llamacpp", llamacpp, default=True)
 
 
 def register_engine(engine_id: str, engine: LLMEngine, default: bool = False) -> None:

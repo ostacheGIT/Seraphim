@@ -68,7 +68,7 @@ class GmailConnector:
         emails = []
         for msg_ref in messages:
             try:
-                msg = _api_get(f"messages/{msg_ref['id']}?format=metadata&metadataHeaders=From,Subject,Date", token)
+                msg = _api_get(f"messages/{msg_ref['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date", token)
                 headers = msg.get("payload", {}).get("headers", [])
                 emails.append({
                     "subject": _extract_header(headers, "Subject") or "(no subject)",

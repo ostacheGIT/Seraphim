@@ -4,11 +4,15 @@ from pydantic_settings import BaseSettings
 import yaml
 
 class EngineSettings(BaseModel):
-    provider: str = "ollama"
+    provider: str = "ollama"          # ollama | vllm | llamacpp
     model: str = "llama3.2"
     base_url: str = "http://localhost:11434"
     temperature: float = 0.7
     context_window: int = 4096
+    # vLLM-specific (used when provider=vllm)
+    vllm_port: int = 8000
+    vllm_gpu_memory_utilization: float = 0.85  # safe default for 4GB VRAM
+    vllm_max_model_len: int = 4096
 
 class ServerSettings(BaseModel):
     host: str = "0.0.0.0"

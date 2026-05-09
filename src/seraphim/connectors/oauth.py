@@ -164,8 +164,10 @@ def run_oauth_flow() -> None:
     server = http.server.HTTPServer(("localhost", _CALLBACK_PORT), _CallbackHandler)
     server.timeout = 1
 
-    print(f"Opening browser for Google authentication...")
-    print(f"If browser doesn't open, visit:\n  {auth_url}")
+    from rich.console import Console as _Con
+    _con = _Con()
+    _con.print("[dim]Opening browser for Google authentication...[/dim]")
+    _con.print(f"[dim]If browser doesn't open, visit:[/dim]\n  {auth_url}")
     webbrowser.open(auth_url)
 
     deadline = time.time() + 120
@@ -201,4 +203,3 @@ def run_oauth_flow() -> None:
         "expiry": time.time() + resp.get("expires_in", 3600),
     }
     save_tokens(tokens)
-    print("Google authentication successful. Tokens saved.")
