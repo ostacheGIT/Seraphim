@@ -58,6 +58,7 @@ MagicMock/
 site/
 
 # Frontend
+node_modules/
 frontend/node_modules/
 frontend/dist/
 src/openjarvis/server/static/
