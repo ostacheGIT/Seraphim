@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional
 
 from seraphim.engine.base import LLMEngine
@@ -8,6 +9,14 @@ from seraphim.engine.ollama import OllamaEngine
 _engines: Dict[str, LLMEngine] = {}
 _default_engine_id: Optional[str] = None
 _initialized: bool = False
+_gpu_available: bool = False
+
+logger = logging.getLogger(__name__)
+
+
+def gpu_available() -> bool:
+    _ensure_initialized()
+    return _gpu_available
 
 
 def _ensure_initialized() -> None:
@@ -18,7 +27,15 @@ def _ensure_initialized() -> None:
 
 
 def init_engines() -> None:
-    global _default_engine_id
+    global _default_engine_id, _gpu_available
+
+    from seraphim.engine.metrics import get_gpu_snapshot
+    _gpu = get_gpu_snapshot()
+    _gpu_available = _gpu is not None
+    if _gpu_available:
+        logger.info("GPU detected: %s (%.0f MB free)", _gpu.gpu_name, _gpu.vram_free_mb)
+    else:
+        logger.info("No GPU detected — running on CPU")
 
     try:
         from seraphim.settings import settings

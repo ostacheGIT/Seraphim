@@ -18,7 +18,7 @@ agents:
 engine:
   base_url: http://localhost:11434
   context_window: 4096
-  model: llama3.2
+  model: qwen2.5:3b
   provider: ollama
   temperature: 0.7
   vllm_port: 8000

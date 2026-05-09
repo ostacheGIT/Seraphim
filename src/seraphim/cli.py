@@ -302,6 +302,18 @@ def doctor():
             if not has_model and provider == "ollama":
                 console.print(f"     → Run: [bold]ollama pull {settings.engine.model}[/bold]")
 
+        from seraphim.engine.metrics import get_gpu_snapshot
+        gpu = get_gpu_snapshot()
+        if gpu:
+            filled = min(20, int(gpu.vram_used_pct / 5))
+            bar = "█" * filled + "░" * (20 - filled)
+            console.print(
+                f"  [green]✓[/green] GPU: {gpu.gpu_name}  "
+                f"VRAM [{bar}] {gpu.vram_free_mb:.0f} MB free / {gpu.vram_total_mb:.0f} MB"
+            )
+        else:
+            console.print("  [yellow]⚠[/yellow] GPU: not detected — CPU mode")
+
         from pathlib import Path
         home = Path.home() / ".seraphim"
         status = "[green]✓[/green]" if home.exists() else "[yellow]⚠[/yellow]"

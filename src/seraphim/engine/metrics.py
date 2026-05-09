@@ -99,6 +99,10 @@ def get_gpu_snapshot(device_index: int = 0) -> GpuSnapshot | None:
     return None
 
 
+def has_gpu() -> bool:
+    return get_gpu_snapshot() is not None
+
+
 # ── Per-inference metrics ─────────────────────────────────────────────────────
 
 @dataclass
