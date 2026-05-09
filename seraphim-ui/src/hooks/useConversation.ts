@@ -105,6 +105,44 @@ export function useConversation() {
       [activeId],
   );
 
+  const replaceFromMessage = useCallback(
+      (upToMessageId: string, newContent: string): string => {
+        const newId = generateId();
+        setConversations((prev) =>
+            prev.map((c) => {
+              if (c.id !== activeId) return c;
+              const idx = c.messages.findIndex((m) => m.id === upToMessageId);
+              if (idx === -1) return c;
+              const newMsg: Message = {
+                id: newId,
+                role: "user",
+                content: newContent,
+                timestamp: new Date(),
+                status: "done",
+              };
+              return { ...c, messages: [...c.messages.slice(0, idx), newMsg] };
+            }),
+        );
+        return newId;
+      },
+      [activeId],
+  );
+
+  const truncateMessages = useCallback(
+      async (sessionId: string, keepCount: number) => {
+        try {
+          await fetch(`${API}/memory/sessions/${sessionId}/truncate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ keep_count: keepCount }),
+          });
+        } catch (e) {
+          console.error("Truncate session failed:", e);
+        }
+      },
+      [],
+  );
+
   const addMessage = useCallback(
       (content: string, role: "user" | "assistant", status?: Message["status"], traceId?: string, imageUrl?: string) => {
         const msg: Message = {
@@ -146,5 +184,7 @@ export function useConversation() {
     newConversation,
     deleteConversation,
     addMessage,
+    replaceFromMessage,
+    truncateMessages,
   };
 }

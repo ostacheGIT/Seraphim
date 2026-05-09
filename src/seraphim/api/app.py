@@ -26,6 +26,7 @@ from seraphim.memory.store import (
     load_history,
     list_sessions,
     delete_session,
+    truncate_session,
     save_message,
 )
 from seraphim.learning.trace_store import (
@@ -732,6 +733,16 @@ async def get_session_history(session_id: str, limit: int = 50):
 async def remove_session(session_id: str):
     await delete_session(session_id)
     return {"deleted": session_id}
+
+
+class TruncateRequest(BaseModel):
+    keep_count: int
+
+
+@app.post("/memory/sessions/{session_id}/truncate", dependencies=[Depends(_require_api_key)])
+async def truncate_session_endpoint(session_id: str, req: TruncateRequest):
+    await truncate_session(session_id, req.keep_count)
+    return {"ok": True, "session_id": session_id, "kept": req.keep_count}
 
 
 # ─── TTS / Voice ─────────────────────────────────────────────────────────────

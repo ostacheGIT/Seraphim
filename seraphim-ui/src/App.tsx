@@ -20,6 +20,8 @@ export default function App() {
         newConversation,
         deleteConversation,
         addMessage,
+        replaceFromMessage,
+        truncateMessages,
     } = useConversation();
 
     const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
@@ -70,6 +72,46 @@ export default function App() {
         [isThinking, addMessage, activeId, engineId, agentId, pendingImage],
     );
 
+    const editMessage = useCallback(
+        async (messageId: string, newContent: string) => {
+            if (isThinking || !activeId || !active) return;
+            const msgs = active.messages;
+            const idx = msgs.findIndex((m) => m.id === messageId);
+            if (idx === -1) return;
+
+            // Context = messages before the edited one (for backend override)
+            const contextMessages = msgs
+                .slice(0, idx)
+                .map((m) => ({ role: m.role, content: m.content }));
+
+            // DB keep = user messages before edit × 2 (each turn = user + assistant row)
+            const dbKeepCount = msgs.slice(0, idx).filter((m) => m.role === "user").length * 2;
+
+            replaceFromMessage(messageId, newContent);
+            await truncateMessages(activeId, dbKeepCount);
+
+            setIsThinking(true);
+            try {
+                const { response, traceId } = await askSeraphim(
+                    newContent,
+                    activeId,
+                    undefined,
+                    (sentence) => speakRef.current?.(sentence),
+                    engineId,
+                    agentId,
+                    undefined,
+                    contextMessages,
+                );
+                addMessage(response, "assistant", "done", traceId ?? undefined);
+            } catch {
+                addMessage("Erreur : impossible de contacter le backend Seraphim.", "assistant", "error");
+            } finally {
+                setIsThinking(false);
+            }
+        },
+        [isThinking, active, activeId, replaceFromMessage, truncateMessages, addMessage, engineId, agentId],
+    );
+
     async function handleSend() {
         await sendMessage(input);
     }
@@ -90,6 +132,7 @@ export default function App() {
             onSelectConversation={setActiveId}
             onNewConversation={newConversation}
             onDeleteConversation={deleteConversation}
+            onEditMessage={editMessage}
             engineId={engineId}
             onEngineChange={setEngineId}
             agentId={agentId}

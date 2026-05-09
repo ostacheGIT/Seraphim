@@ -33,6 +33,7 @@ export async function askSeraphim(
     engineId: EngineId = "ollama_qwen3b",
     agent: string = "react",
     image?: string,
+    contextMessages?: { role: string; content: string }[],
 ): Promise<{ response: string; traceId: string | null }> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
@@ -43,7 +44,7 @@ export async function askSeraphim(
       model: engineId,
       engine_id: engineId,
       session_id: sessionId ?? null,
-      messages: [],
+      messages: contextMessages ?? [],
       stream: true,
       image: image ?? null,
     }),

@@ -92,3 +92,17 @@ async def delete_session(session: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM conversations WHERE session = ?", (session,))
         await db.commit()
+
+
+async def truncate_session(session: str, keep_count: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            DELETE FROM conversations
+            WHERE session = ? AND id NOT IN (
+                SELECT id FROM conversations
+                WHERE session = ?
+                ORDER BY id ASC
+                LIMIT ?
+            )
+        """, (session, session, keep_count))
+        await db.commit()
