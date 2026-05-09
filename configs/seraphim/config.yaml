@@ -33,7 +33,7 @@ memory:
   context_top_k: 5
   path: ~/.seraphim/memory.db
   rag_backend: sqlite_fts
-  rag_enabled: true
+  rag_enabled: false
 server:
   host: 0.0.0.0
   port: 7272

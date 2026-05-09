@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from seraphim.agents.router import RoutingDecision
 
 _DB_PATH = Path.home() / ".seraphim" / "learning.db"
+_table_ready = False
 
 # ── Query classes ─────────────────────────────────────────────────────────────
 
@@ -116,24 +117,34 @@ def classify_query(query: str) -> str:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-async def _ensure_table() -> None:
+async def _ensure_table_in_conn(db: aiosqlite.Connection) -> None:
+    global _table_ready
+    if _table_ready:
+        return
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(_DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS routing_stats (
-                query_class      TEXT NOT NULL,
-                agent            TEXT NOT NULL,
-                sample_count     INTEGER NOT NULL DEFAULT 0,
-                total_score      REAL    NOT NULL DEFAULT 0.0,
-                total_latency_ms REAL    NOT NULL DEFAULT 0.0,
-                last_updated     TEXT    NOT NULL,
-                PRIMARY KEY (query_class, agent)
-            )
-        """)
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routing_class ON routing_stats(query_class)"
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS routing_stats (
+            query_class      TEXT NOT NULL,
+            agent            TEXT NOT NULL,
+            sample_count     INTEGER NOT NULL DEFAULT 0,
+            total_score      REAL    NOT NULL DEFAULT 0.0,
+            total_latency_ms REAL    NOT NULL DEFAULT 0.0,
+            last_updated     TEXT    NOT NULL,
+            PRIMARY KEY (query_class, agent)
         )
-        await db.commit()
+    """)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_routing_class ON routing_stats(query_class)"
+    )
+    await db.commit()
+    _table_ready = True
+
+
+async def _ensure_table() -> None:
+    if _table_ready:
+        return
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await _ensure_table_in_conn(db)
 
 
 async def update_routing_stats(
@@ -143,9 +154,9 @@ async def update_routing_stats(
     latency_ms: float = 0.0,
 ) -> None:
     """Upsert running stats for (query_class, agent). Called after each trace."""
-    await _ensure_table()
     now = datetime.now().isoformat()
     async with aiosqlite.connect(_DB_PATH) as db:
+        await _ensure_table_in_conn(db)
         await db.execute(
             """
             INSERT INTO routing_stats (query_class, agent, sample_count, total_score, total_latency_ms, last_updated)
@@ -163,8 +174,8 @@ async def update_routing_stats(
 
 async def get_routing_stats() -> list[dict]:
     """Return all routing stats as list of dicts (sorted by query_class, mean_score desc)."""
-    await _ensure_table()
     async with aiosqlite.connect(_DB_PATH) as db:
+        await _ensure_table_in_conn(db)
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT
@@ -205,9 +216,8 @@ async def learned_route(
     if query_class in ("system", "math", "http"):
         return None
 
-    await _ensure_table()
-
     async with aiosqlite.connect(_DB_PATH) as db:
+        await _ensure_table_in_conn(db)
         db.row_factory = aiosqlite.Row
         # Get all agents for this class with enough samples
         async with db.execute(

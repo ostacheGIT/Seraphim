@@ -30,6 +30,11 @@ class OllamaEngine:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.last_metrics: InferenceMetrics | None = None
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=self.timeout,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        )
 
     def _build_prompt(self, messages: List[ChatMessage]) -> str:
         parts: List[str] = []
@@ -48,18 +53,15 @@ class OllamaEngine:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=5.0) as client:
-                r = await client.get("/api/tags")
-                return r.status_code == 200
+            r = await self._client.get("/api/tags", timeout=5.0)
+            return r.status_code == 200
         except Exception:
             return False
 
     async def list_models(self) -> List[str]:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as client:
-            r = await client.get("/api/tags")
-            r.raise_for_status()
-            data = r.json()
-        return [m["name"] for m in data.get("models", [])]
+        r = await self._client.get("/api/tags", timeout=10.0)
+        r.raise_for_status()
+        return [m["name"] for m in r.json().get("models", [])]
 
     async def chat(
             self,
@@ -105,13 +107,9 @@ class OllamaEngine:
             payload.update(kwargs)
 
         t0 = time.perf_counter_ns()
-        async with httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=self.timeout,
-        ) as client:
-            r = await client.post("/api/chat", json=payload)
-            r.raise_for_status()
-            data = r.json()
+        r = await self._client.post("/api/chat", json=payload)
+        r.raise_for_status()
+        data = r.json()
 
         self.last_metrics = parse_ollama_metrics(data, t0)
         message = data.get("message", {})
@@ -144,11 +142,7 @@ class OllamaEngine:
         t0 = time.perf_counter_ns()
         first_token_ns: int | None = None
 
-        async with httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=self.timeout,
-        ) as client:
-            async with client.stream("POST", "/api/generate", json=payload) as response:
+        async with self._client.stream("POST", "/api/generate", json=payload) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
