@@ -44,6 +44,18 @@ _CODE_RE = re.compile(
     re.I | re.VERBOSE,
     )
 
+_CODEACT_RE = re.compile(
+    r"""(?:
+        (?:résous?|solve|trouve|find)\s+.{0,50}(?:en\s+python|avec\s+(?:du\s+)?code|en\s+code)|
+        (?:écris?\s+(?:un\s+)?(?:script|code|programme).{0,40}et\s+(?:exécute|lance|run|teste?))|
+        (?:génère.{0,30}(?:et\s+)?(?:exécute|lance|teste?))|
+        (?:itère|iterate).{0,40}(?:code|script)|
+        (?:analyse|traite|process)\s+.{0,50}(?:données|data|fichier|csv|json).{0,30}(?:python|code)|
+        (?:calcule?\s+.{0,40}(?:et\s+)?(?:vérifie|check|teste?|affiche\s+le\s+résultat))
+    )""",
+    re.I | re.VERBOSE,
+)
+
 _HTTP_RE = re.compile(
     r"""(?:
         (?:requête|request|fetch|curl|appel\s+api|http\s+request)\s+(?:GET|POST|PUT|DELETE|PATCH|sur\s+)?https?://|
@@ -112,17 +124,21 @@ def route(query: str) -> RoutingDecision:
     if _SYSTEM_RE.search(q):
         return RoutingDecision(agent="react", skill=None, reason="system command detected")
 
-    # 2. Code / script Python — "écris/génère" → coder; "exécute/run" → code_interpreter
+    # 2. CodeAct — iterative code generation + execution loop
+    if _CODEACT_RE.search(q):
+        return RoutingDecision(agent="codeact", skill=None, reason="iterative code execution detected")
+
+    # 3. Code / script Python — "écris/génère" → coder; "exécute/run" → codeact (loop)
     if _CODE_RE.search(q):
         if re.search(r"(?:exécute|run|execute|lance)\s+(?:ce\s+)?(?:code|script)", q, re.I):
             return RoutingDecision(
-                agent="skill:code_interpreter",
-                skill="code_interpreter",
-                reason="code execution request detected",
+                agent="codeact",
+                skill=None,
+                reason="code execution request — iterative CodeAct loop",
             )
         return RoutingDecision(agent="coder", skill=None, reason="code generation request detected")
 
-    # 3. Fichiers locaux
+    # 4. Fichiers locaux
     if _FILE_RE.search(q):
         return RoutingDecision(agent="react", skill=None, reason="file operation detected")
 

@@ -71,7 +71,7 @@ def init():
 @app.command()
 def ask(
         query: str = typer.Argument(..., help="Your question or instruction"),
-        agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, researcher, react"),
+        agent: str = typer.Option("chat", "--agent", "-a", help="Agent: chat, coder, codeact, researcher, react"),
         model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model (compat)"),
         engine: Optional[str] = typer.Option(
             None,
@@ -128,19 +128,32 @@ def ask(
             if hasattr(ag, "engine_id"):
                 ag.engine_id = engine_id  # type: ignore[assignment]
 
-        # Learned routing override — only when user didn't pin an agent explicitly
+        # Auto-routing — only when user didn't pin an agent explicitly
         if not _skill_prefix_match and agent == "chat":
             try:
-                from seraphim.agents.learned_router import learned_route
-                override = await learned_route(query, ag.name)
-                if override:
-                    if override.agent.startswith("skill:") and override.skill:
+                # Static rule-based router (fast, deterministic) — primary
+                from seraphim.agents.router import route as _static_route
+                _static_decision = _static_route(query)
+                if _static_decision.agent != "chat":
+                    if _static_decision.agent.startswith("skill:") and _static_decision.skill:
                         from seraphim.agents.base import SkillAgent as _SA
-                        ag = _SA(override.skill)
+                        ag = _SA(_static_decision.skill)
                     else:
-                        ag = get_agent(override.agent)
+                        ag = get_agent(_static_decision.agent)
                         if hasattr(ag, "engine_id"):
                             ag.engine_id = engine_id
+                else:
+                    # Learned routing — fallback when static returns chat
+                    from seraphim.agents.learned_router import learned_route
+                    override = await learned_route(query, ag.name)
+                    if override:
+                        if override.agent.startswith("skill:") and override.skill:
+                            from seraphim.agents.base import SkillAgent as _SA
+                            ag = _SA(override.skill)
+                        else:
+                            ag = get_agent(override.agent)
+                            if hasattr(ag, "engine_id"):
+                                ag.engine_id = engine_id
             except Exception:
                 pass
 
@@ -167,7 +180,7 @@ def ask(
 
         if stream:
             console.print(
-                f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",
+                f"[dim]Seraphim ({ag.name}) [{sess}] engine={engine_id or 'default'} ›[/dim] ",
                 end="",
             )
             full_response = await ag.run(_run_query, ctx)
@@ -176,7 +189,7 @@ def ask(
             with console.status("[dim]Thinking...[/dim]"):
                 full_response = await ag.run(_run_query, ctx)
             console.print(
-                f"[dim]Seraphim ({agent}) [{sess}] engine={engine_id or 'default'} ›[/dim]"
+                f"[dim]Seraphim ({ag.name}) [{sess}] engine={engine_id or 'default'} ›[/dim]"
             )
             console.print(Markdown(full_response))
 

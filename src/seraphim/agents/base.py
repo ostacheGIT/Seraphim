@@ -598,6 +598,82 @@ class CoderAgent(BaseAgent):
         return clean + "\n".join(status_lines)
 
 
+class CodeActAgent(BaseAgent):
+    """CodeAct loop — generate Python code, execute it, iterate on output until task is complete."""
+
+    name = "codeact"
+    description = "Résout des problèmes computationnels en écrivant du code Python, l'exécutant et itérant sur l'output"
+    _MAX_TURNS = 8
+    _MAX_PROMPT_TOKENS = 3000
+
+    system_prompt = (
+        "You are Seraphim in CodeAct mode. Solve problems by writing and executing Python code.\n\n"
+        "## Workflow\n"
+        "1. Write Python code in a ```python block\n"
+        "2. The code will be executed — you receive the output\n"
+        "3. Iterate: fix errors, refine, continue computation\n"
+        "4. When done, give your final answer in plain text (no code block)\n\n"
+        "## Rules\n"
+        "- Write complete, runnable Python code each turn\n"
+        "- Use execution output to debug and iterate\n"
+        "- Final answer must contain no code block\n"
+        "- Standard library only unless the user specifies packages\n"
+        + _IDENTITY_BLOCK
+    )
+
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    def _truncate(self, messages: list) -> list:
+        total_chars = sum(len(m.get("content", "") or "") for m in messages)
+        if total_chars // 4 <= self._MAX_PROMPT_TOKENS:
+            return messages
+        excess_chars = (total_chars // 4 - self._MAX_PROMPT_TOKENS) * 4
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                original = messages[i].get("content", "")
+                if len(original) > excess_chars + 200:
+                    messages[i] = {
+                        **messages[i],
+                        "content": original[: len(original) - excess_chars] + "\n[truncated]",
+                    }
+                break
+        return messages
+
+    async def run(self, query: str, context: AgentContext | None = None) -> str:
+        ctx = self.build_context(query, context)
+
+        code_skill = SKILL_REGISTRY.get("code_interpreter") or SKILL_REGISTRY.get("repl")
+        if not code_skill:
+            return await self._chat(ctx.messages)
+
+        response = ""
+        for _turn in range(self._MAX_TURNS):
+            ctx.messages = self._truncate(ctx.messages)
+            response = self._strip_think(await self._chat(ctx.messages))
+
+            code_match = re.search(r"```python\n(.*?)```", response, re.DOTALL)
+            if not code_match:
+                ctx.add_assistant(response)
+                return response
+
+            code = code_match.group(1).strip()
+            ctx.add_assistant(response)
+
+            result = await code_skill.run(code=code)
+            obs = result.output if result.success else f"Error:\n{result.error}"
+            if len(obs) > _MAX_OUTPUT:
+                obs = obs[:_MAX_OUTPUT] + "\n[output truncated]"
+
+            ctx.messages.append({
+                "role": "user",
+                "content": f"Output:\n{obs}\n\nContinue if needed, or give your final answer (no code block).",
+            })
+
+        return response or "Maximum iterations reached."
+
+
 class ResearcherAgent(BaseAgent):
     name = "researcher"
     description = "Research assistant: summarisation, QA on documents, analysis"
@@ -1534,6 +1610,7 @@ class SkillAgent(BaseAgent):
 AGENT_REGISTRY: dict[str, type[BaseAgent]] = {
     "chat":       ChatAgent,
     "coder":      CoderAgent,
+    "codeact":    CodeActAgent,
     "researcher": ResearcherAgent,
     "react":      ReActAgent,
     "skill":      SkillAgent,
