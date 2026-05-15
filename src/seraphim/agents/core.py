@@ -27,7 +27,10 @@ class AgentContext:
         self.messages.append({"role": "assistant", "content": content})
 
     def add_system(self, content: str) -> None:
-        # On garde ton comportement: le system en tête
+        for i, m in enumerate(self.messages):
+            if m.get("role") == "system":
+                self.messages[i] = {"role": "system", "content": content}
+                return
         self.messages.insert(0, {"role": "system", "content": content})
 
 

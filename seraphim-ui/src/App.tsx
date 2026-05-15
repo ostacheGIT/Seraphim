@@ -20,6 +20,7 @@ export default function App() {
         newConversation,
         deleteConversation,
         addMessage,
+        updateMessage,
         replaceFromMessage,
         truncateMessages,
     } = useConversation();
@@ -50,26 +51,43 @@ export default function App() {
             const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;
             addMessage(trimmed || "📎 Image", "user", undefined, undefined, imageDataUrl);
             setIsThinking(true);
+            let assistantMsgId: string | null = null;
+            let accumulated = "";
             try {
                 const { response, traceId } = await askSeraphim(
                     trimmed || "Analyse cette image.",
                     activeId ?? undefined,
-                    undefined,
+                    (token) => {
+                        accumulated += token;
+                        if (assistantMsgId === null) {
+                            assistantMsgId = addMessage(accumulated, "assistant", "streaming");
+                        } else {
+                            updateMessage(assistantMsgId, accumulated, "streaming");
+                        }
+                    },
                     (sentence) => speakRef.current?.(sentence),
                     engineId,
                     agentId,
                     imageSnapshot ?? undefined,
                 );
-                addMessage(response, "assistant", "done", traceId ?? undefined);
+                if (assistantMsgId === null) {
+                    addMessage(response, "assistant", "done", traceId ?? undefined);
+                } else {
+                    updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                }
             } catch {
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
-                addMessage(errMsg, "assistant", "error");
+                if (assistantMsgId === null) {
+                    addMessage(errMsg, "assistant", "error");
+                } else {
+                    updateMessage(assistantMsgId, errMsg, "error");
+                }
                 await speakRef.current?.(errMsg);
             } finally {
                 setIsThinking(false);
             }
         },
-        [isThinking, addMessage, activeId, engineId, agentId, pendingImage],
+        [isThinking, addMessage, updateMessage, activeId, engineId, agentId, pendingImage],
     );
 
     const editMessage = useCallback(
@@ -91,25 +109,43 @@ export default function App() {
             await truncateMessages(activeId, dbKeepCount);
 
             setIsThinking(true);
+            let assistantMsgId: string | null = null;
+            let accumulated = "";
             try {
                 const { response, traceId } = await askSeraphim(
                     newContent,
                     activeId,
-                    undefined,
+                    (token) => {
+                        accumulated += token;
+                        if (assistantMsgId === null) {
+                            assistantMsgId = addMessage(accumulated, "assistant", "streaming");
+                        } else {
+                            updateMessage(assistantMsgId, accumulated, "streaming");
+                        }
+                    },
                     (sentence) => speakRef.current?.(sentence),
                     engineId,
                     agentId,
                     undefined,
                     contextMessages,
                 );
-                addMessage(response, "assistant", "done", traceId ?? undefined);
+                if (assistantMsgId === null) {
+                    addMessage(response, "assistant", "done", traceId ?? undefined);
+                } else {
+                    updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                }
             } catch {
-                addMessage("Erreur : impossible de contacter le backend Seraphim.", "assistant", "error");
+                const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
+                if (assistantMsgId === null) {
+                    addMessage(errMsg, "assistant", "error");
+                } else {
+                    updateMessage(assistantMsgId, errMsg, "error");
+                }
             } finally {
                 setIsThinking(false);
             }
         },
-        [isThinking, active, activeId, replaceFromMessage, truncateMessages, addMessage, engineId, agentId],
+        [isThinking, active, activeId, replaceFromMessage, truncateMessages, addMessage, updateMessage, engineId, agentId],
     );
 
     async function handleSend() {

@@ -174,6 +174,26 @@ export function useConversation() {
       [activeId],
   );
 
+  const updateMessage = useCallback(
+      (id: string, content: string, status?: Message["status"], traceId?: string) => {
+        setConversations((prev) =>
+            prev.map((c) => {
+              if (c.id !== activeId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) =>
+                    m.id === id
+                        ? { ...m, content, ...(status !== undefined ? { status } : {}), ...(traceId !== undefined ? { traceId } : {}) }
+                        : m,
+                ),
+                updatedAt: new Date(),
+              };
+            }),
+        );
+      },
+      [activeId],
+  );
+
   return {
     conversations,
     activeId,
@@ -184,6 +204,7 @@ export function useConversation() {
     newConversation,
     deleteConversation,
     addMessage,
+    updateMessage,
     replaceFromMessage,
     truncateMessages,
   };

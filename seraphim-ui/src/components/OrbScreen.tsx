@@ -277,7 +277,7 @@ export default function OrbScreen({
                             {conversation?.messages.map((msg) => (
                                 <MessageBubble key={msg.id} message={msg} onEdit={onEditMessage} />
                             ))}
-                            {isThinking && (
+                            {isThinking && !conversation?.messages.some(m => m.status === "streaming") && (
                                 <div className="chat-msg assistant">
                                     <div className="msg-role">SERAPHIM</div>
                                     <div className="msg-content thinking-dots">

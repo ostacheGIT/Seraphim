@@ -3,7 +3,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  status?: "pending" | "done" | "error";
+  status?: "pending" | "streaming" | "done" | "error";
   traceId?: string;
   imageUrl?: string;  // base64 data URL for user messages with attached image
 }

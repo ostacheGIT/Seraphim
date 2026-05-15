@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 import asyncio
+from contextlib import asynccontextmanager
 from functools import partial
 from typing import Optional, Literal
 
@@ -37,10 +38,20 @@ from seraphim.learning.trace_store import (
 )
 from seraphim.voice.speaker import synthesize_to_bytes, speak_async
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    from seraphim.memory import init_rag
+    init_rag()
+    _maybe_start_daemon()
+    yield
+
+
 app = FastAPI(
     title="Seraphim",
     description="Your personal AI, running entirely on your machine",
     version=__version__,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -60,16 +71,6 @@ async def _require_api_key(x_api_key: str | None = Security(_api_key_header)) ->
         return
     if x_api_key != configured:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
-
-# ─── Startup ─────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
-    from seraphim.memory import init_rag
-    init_rag()
-    _maybe_start_daemon()
-
 
 def _maybe_start_daemon() -> None:
     """Auto-start learning daemon if config has auto_start=true and daemon not running."""
@@ -119,7 +120,7 @@ def _maybe_start_daemon() -> None:
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 
-EngineId = Optional[Literal["ollama_qwen3b", "ollama_qwen7b"]]
+EngineId = Optional[Literal["ollama_qwen3b", "ollama_qwen7b", "vllm", "llamacpp"]]
 
 
 class ChatRequest(BaseModel):
@@ -281,17 +282,19 @@ _NO_VISION_MSG = (
 )
 
 
-async def _augment_query_with_image(query: str, image_b64: str | None) -> str:
+async def _augment_query_with_image(query: str, image_b64: str | None) -> tuple[str, bool]:
+    """Returns (augmented_query, vision_unavailable).
+    vision_unavailable=True when image provided but no vision model installed."""
     if not image_b64:
-        return query
+        return query, False
     description = await _describe_image(image_b64, query)
     if description is None:
-        return f"__VISION_UNAVAILABLE__\n{query}"
+        return query, True
     return (
         f"{description}\n\n"
         f"---\n"
         f"{query}"
-    )
+    ), False
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -600,8 +603,8 @@ async def chat(req: ChatRequest):
         ctx = AgentContext(messages=history, session_id=session_id)
     else:
         ctx = AgentContext(session_id=session_id)
-    effective_query = await _augment_query_with_image(req.query, req.image)
-    if effective_query.startswith("__VISION_UNAVAILABLE__"):
+    effective_query, vision_unavailable = await _augment_query_with_image(req.query, req.image)
+    if vision_unavailable:
         response = _NO_VISION_MSG
     else:
         response = await ag.run(effective_query, ctx)
@@ -656,11 +659,11 @@ async def chat_stream(req: ChatRequest):
     else:
         ctx = AgentContext(session_id=session_id)
 
-    effective_query = await _augment_query_with_image(req.query, req.image)
+    effective_query, vision_unavailable = await _augment_query_with_image(req.query, req.image)
     trace_id = str(uuid.uuid4())
 
     async def generator():
-        if effective_query.startswith("__VISION_UNAVAILABLE__"):
+        if vision_unavailable:
             result = _NO_VISION_MSG
             yield result
         elif req.image:
