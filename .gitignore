@@ -65,6 +65,10 @@ src/openjarvis/server/static/
 
 # Desktop (Tauri)
 frontend/src-tauri/target/
+seraphim-ui/src-tauri/target/
+seraphim-ui/src-tauri/resources/
+seraphim-ui/src-tauri/icons/android/
+seraphim-ui/src-tauri/icons/ios/
 
 # Worktrees
 .worktrees/
