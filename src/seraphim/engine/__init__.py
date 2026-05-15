@@ -50,8 +50,8 @@ def init_engines() -> None:
         temperature = 0.7
 
     # Always register Ollama engines as fallback
-    register_engine("ollama_qwen3b", OllamaEngine(model="qwen2.5:3b"), default=(provider == "ollama"))
-    register_engine("ollama_qwen7b", OllamaEngine(model="qwen2.5:7b"), default=False)
+    register_engine("ollama_qwen3b", OllamaEngine(model="qwen2.5:3b", base_url=base_url), default=(provider == "ollama"))
+    register_engine("ollama_qwen7b", OllamaEngine(model="qwen2.5:7b", base_url=base_url), default=False)
 
     if provider == "vllm":
         from seraphim.engine.vllm import VLLMEngine
@@ -69,6 +69,11 @@ def register_engine(engine_id: str, engine: LLMEngine, default: bool = False) ->
     _engines[engine_id] = engine
     if default or _default_engine_id is None:
         _default_engine_id = engine_id
+
+
+def get_default_engine_id() -> Optional[str]:
+    _ensure_initialized()
+    return _default_engine_id
 
 
 def get_engine(engine_id: Optional[str] = None) -> LLMEngine:

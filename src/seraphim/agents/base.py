@@ -437,10 +437,10 @@ class ChatAgent(BaseAgent):
         + _IDENTITY_BLOCK
     )
 
-    async def run(self, query: str, context: AgentContext = None) -> str:
+    async def _pre_llm_dispatch(self, query: str, context: AgentContext | None) -> str | None:
+        """Handle all non-LLM paths. Returns a result string, or None to proceed to the LLM."""
         global _pending_code, _pending_file
 
-        # Execution confirmation — user said yes to running pending code
         if _pending_code and re.match(
             r"^(?:oui|yes|ouais|yep|exécute[- ]?le|run\s+it|lance[- ]?le|vas[- ]?y|go|ok|sure|execute|exécute|lancer)\s*[!.,]?\s*$",
             query.strip(), re.I
@@ -450,7 +450,6 @@ class ChatAgent(BaseAgent):
             _pending_file = None
             return await _run_code(code, fpath)
 
-        # Direct skill invocation — user writes "skill:<name> <query>"
         _sdm = _SKILL_DIRECT_RE.match(query.strip())
         if _sdm:
             _skill_name = _sdm.group(1)
@@ -463,7 +462,6 @@ class ChatAgent(BaseAgent):
             except Exception as _e:
                 return f"Erreur skill '{_skill_name}': {_e}"
 
-        # Bypass LLM — math expressions
         expr = _extract_math_expr(query)
         if expr:
             skill = SKILL_REGISTRY.get("calculator")
@@ -471,20 +469,16 @@ class ChatAgent(BaseAgent):
                 result = await skill.run(expression=expr)
                 if result.success:
                     return result.output
-                # fall through to LLM if expression was invalid
 
-        # Bypass LLM — capabilities table
         if _CAPABILITIES_RE.search(query.strip()):
             return _format_capabilities()
 
-        # Bypass LLM — screen describe (vision LLM, check before OCR)
         if _SCREEN_DESCRIBE_RE.search(query):
             skill = SKILL_REGISTRY.get("screen_describe")
             if skill:
                 result = await skill.run(prompt=query)
                 return result.output if result.success else f"Screen describe error: {result.error}"
 
-        # Bypass LLM — screen OCR / capture
         if _SCREEN_OCR_RE.search(query):
             cap_only = bool(re.search(r"\b(?:capture|screenshot|screen[- ]shot)\b", query, re.I))
             if cap_only:
@@ -498,7 +492,6 @@ class ChatAgent(BaseAgent):
                     result = await skill.run()
                     return result.output if result.success else f"OCR error: {result.error}"
 
-        # Bypass LLM — schedule digest
         sm = _SCHEDULE_DIGEST_RE.search(query)
         if sm:
             hour = sm.group(1).zfill(2)
@@ -508,14 +501,12 @@ class ChatAgent(BaseAgent):
             _sp.run([_sys.executable, "-m", "seraphim.cli", "digest", "schedule", "--time", time_str])
             return f"Morning digest scheduled daily at {time_str}. Run `seraphim digest schedule --remove` to cancel."
 
-        # Bypass LLM — morning digest
         if _DIGEST_RE.search(query):
             skill = SKILL_REGISTRY.get("morning_digest")
             if skill:
                 result = await skill.run(no_summary=True)
                 return result.output if result.success else f"Digest error: {result.error}"
 
-        # Bypass LLM — system commands
         for pattern, builder in DIRECT_PATTERNS:
             m = pattern.search(query)
             if m:
@@ -525,6 +516,12 @@ class ChatAgent(BaseAgent):
                     result = await skill.run(**kwargs)
                     return result.output if result.output else (result.error or "(no output)")
 
+        return None
+
+    async def run(self, query: str, context: AgentContext = None) -> str:
+        result = await self._pre_llm_dispatch(query, context)
+        if result is not None:
+            return result
         query = await _inject_clipboard(query)
         ctx = self.build_context(query, context)
         tools = _build_registry_tool_schemas(query)
@@ -533,6 +530,20 @@ class ChatAgent(BaseAgent):
             return await _dispatch_skill_tool_calls(tool_calls, query)
         ctx.add_assistant(response)
         return response
+
+    async def stream(self, query: str, context: AgentContext | None = None):
+        result = await self._pre_llm_dispatch(query, context)
+        if result is not None:
+            yield result
+            return
+        query = await _inject_clipboard(query)
+        ctx = self.build_context(query, context)
+        eng = self.engine
+        if hasattr(eng, "stream_chat_api"):
+            async for chunk in eng.stream_chat_api(ctx.messages):
+                yield chunk
+        else:
+            yield await self._chat(ctx.messages)
 
 class CoderAgent(BaseAgent):
     name = "coder"

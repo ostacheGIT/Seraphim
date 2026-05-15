@@ -162,6 +162,57 @@ class OllamaEngine:
                         self.last_metrics = m
                         break
 
+    async def stream_chat_api(
+            self,
+            messages: List[ChatMessage],
+            **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        """Stream via /api/chat — same message format as chat(), proper chat template."""
+        clean_messages = []
+        for m in messages:
+            cm: Dict[str, Any] = {"role": m.get("role", "user"), "content": m.get("content", "") or ""}
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                cm["tool_calls"] = m["tool_calls"]
+            if m.get("role") == "tool":
+                cm["role"] = "tool"
+            if m.get("name"):
+                cm["name"] = m["name"]
+            if m.get("tool_call_id"):
+                cm["tool_call_id"] = m["tool_call_id"]
+            clean_messages.append(cm)
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": clean_messages,
+            "stream": True,
+        }
+        if kwargs:
+            payload.update(kwargs)
+
+        t0 = time.perf_counter_ns()
+        first_token_ns: int | None = None
+
+        async with self._client.stream("POST", "/api/chat", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                token = (data.get("message") or {}).get("content") or ""
+                if token:
+                    if first_token_ns is None:
+                        first_token_ns = time.perf_counter_ns()
+                    yield token
+                if data.get("done"):
+                    m = parse_ollama_metrics(data, t0)
+                    if first_token_ns is not None:
+                        m.ttft_ms = (first_token_ns - t0) / 1e6
+                    self.last_metrics = m
+                    break
+
 
 # Module-level default instance — reads settings at import time.
 # cli.py and voice/cli_voice.py import this directly.

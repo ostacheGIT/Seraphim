@@ -3,6 +3,7 @@ Seraphim API — FastAPI application.
 """
 
 import logging
+import os
 import uuid
 import asyncio
 from functools import partial
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 from seraphim import __version__
 from seraphim.agents.base import AGENT_REGISTRY, AgentContext, get_agent
 from seraphim.agents.router import route as auto_route
-from seraphim.engine import get_engine
+from seraphim.engine import get_engine, get_default_engine_id
 from seraphim.settings import settings
 from seraphim.memory.store import (
     init_db,
@@ -96,23 +97,23 @@ def _maybe_start_daemon() -> None:
         PID_FILE.unlink(missing_ok=True)
 
     from seraphim.learning.daemon import LOG_FILE
-    log_file = open(LOG_FILE, "a")
-    if sys.platform == "win32":
-        from pathlib import Path as _Path
-        pythonw = _Path(sys.executable).parent / "pythonw.exe"
-        executable = str(pythonw) if pythonw.exists() else sys.executable
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        subprocess.Popen(
-            [executable, "-m", "seraphim.learning.daemon"],
-            stdout=log_file, stderr=log_file,
-            creationflags=flags,
-        )
-    else:
-        subprocess.Popen(
-            [sys.executable, "-m", "seraphim.learning.daemon"],
-            stdout=log_file, stderr=log_file,
-            start_new_session=True,
-        )
+    with open(LOG_FILE, "a") as log_file:
+        if sys.platform == "win32":
+            from pathlib import Path as _Path
+            pythonw = _Path(sys.executable).parent / "pythonw.exe"
+            executable = str(pythonw) if pythonw.exists() else sys.executable
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            subprocess.Popen(
+                [executable, "-m", "seraphim.learning.daemon"],
+                stdout=log_file, stderr=log_file,
+                creationflags=flags,
+            )
+        else:
+            subprocess.Popen(
+                [sys.executable, "-m", "seraphim.learning.daemon"],
+                stdout=log_file, stderr=log_file,
+                start_new_session=True,
+            )
     logger.info("Learning daemon auto-started.")
 
 
@@ -182,7 +183,7 @@ def _ocr_image_b64(image_b64: str) -> str:
 
     _PS_OCR = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$absPath = (Resolve-Path $ImagePath).Path
+$absPath = (Resolve-Path $env:SERAPHIM_OCR_IMG).Path
 [void][System.Reflection.Assembly]::LoadWithPartialName("System.Runtime.WindowsRuntime")
 $null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
 $null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
@@ -206,10 +207,10 @@ Write-Output $result.Text
     tmp = Path(tempfile.gettempdir()) / f"seraphim_ocr_{int(time.time())}.png"
     try:
         tmp.write_bytes(base64.b64decode(image_b64))
-        script = f"$ImagePath='{tmp}'\n" + _PS_OCR
         proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_OCR],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+            env={**os.environ, "SERAPHIM_OCR_IMG": str(tmp)},
         )
         return (proc.stdout or "").strip()
     except Exception as e:
@@ -225,7 +226,7 @@ async def _describe_image(image_b64: str, user_query: str) -> str | None:
     import urllib.request
     base_url = settings.engine.base_url.rstrip("/")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # Always run OCR — deterministic, accurate for text
     ocr_text = await loop.run_in_executor(None, _ocr_image_b64, image_b64)
@@ -315,7 +316,7 @@ async def health():
     return {
         "seraphim": "ok",
         "engine": engine_status,
-        "default_engine_id": "ollama_qwen3b",
+        "default_engine_id": get_default_engine_id() or "ollama_qwen3b",
     }
 
 
@@ -442,7 +443,7 @@ class SkillInstallRequest(BaseModel):
 
 @app.post("/skills/install", dependencies=[Depends(_require_api_key)])
 async def install_skill_endpoint(req: SkillInstallRequest):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(None, partial(_do_install_skill, req.name, req.source, req.force))
     except ValueError as e:
@@ -517,7 +518,7 @@ def _do_install_skill(name: str, source: str, force: bool) -> dict:
 
 @app.post("/skills/catalog/build", dependencies=[Depends(_require_api_key)])
 async def build_skill_catalog():
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     count = await loop.run_in_executor(None, _do_build_catalog)
     return {"indexed": count}
 
@@ -558,15 +559,17 @@ async def _resolve_agent_name(req: ChatRequest) -> str:
     """
     if req.agent in ("auto", "", None):
         decision = auto_route(req.query)
-        try:
-            from seraphim.agents.learned_router import learned_route
-            override = await learned_route(req.query, decision.agent)
-            if override:
-                logger.debug("Learned router override: %s → %s (%s)",
-                             decision.agent, override.agent, override.reason)
-                return override.agent
-        except Exception:
-            pass
+        if decision.agent == "chat":
+            # Only let learned_route override when static is uncertain (chat)
+            try:
+                from seraphim.agents.learned_router import learned_route
+                override = await learned_route(req.query, decision.agent)
+                if override:
+                    logger.debug("Learned router override: %s → %s (%s)",
+                                 decision.agent, override.agent, override.reason)
+                    return override.agent
+            except Exception:
+                pass
         return decision.agent
     return req.agent
 
@@ -591,12 +594,12 @@ async def chat(req: ChatRequest):
 
     session_id = req.session_id or str(uuid.uuid4())
     if req.messages:
-        ctx = AgentContext(messages=req.messages)
+        ctx = AgentContext(messages=req.messages, session_id=session_id)
     elif req.session_id:
         history = await load_history(req.session_id, limit=20)
-        ctx = AgentContext(messages=history)
+        ctx = AgentContext(messages=history, session_id=session_id)
     else:
-        ctx = None
+        ctx = AgentContext(session_id=session_id)
     effective_query = await _augment_query_with_image(req.query, req.image)
     if effective_query.startswith("__VISION_UNAVAILABLE__"):
         response = _NO_VISION_MSG
@@ -646,48 +649,51 @@ async def chat_stream(req: ChatRequest):
 
     session_id = req.session_id or str(uuid.uuid4())
     if req.messages:
-        ctx = AgentContext(messages=req.messages)
+        ctx = AgentContext(messages=req.messages, session_id=session_id)
     elif req.session_id:
         history = await load_history(req.session_id, limit=20)
-        ctx = AgentContext(messages=history)
+        ctx = AgentContext(messages=history, session_id=session_id)
     else:
-        ctx = AgentContext()
+        ctx = AgentContext(session_id=session_id)
 
     effective_query = await _augment_query_with_image(req.query, req.image)
-    if effective_query.startswith("__VISION_UNAVAILABLE__"):
-        result = _NO_VISION_MSG
-    elif req.image:
-        # Image queries: skip all DIRECT_PATTERNS, call LLM directly
-        from seraphim.agents.core import AgentContext as _AC
-        chat_ag = _build_agent("chat", engine_id)
-        img_ctx = _AC()
-        img_ctx.add_system(chat_ag.system_prompt)
-        img_ctx.add_user(effective_query)
-        result = await chat_ag._chat(img_ctx.messages)
-    else:
-        result = await ag.run(effective_query, ctx)
-
-    await save_message(session_id, "user", req.query, routed_agent)
-    await save_message(session_id, "assistant", result, routed_agent)
-
-    inf = await _get_engine_metrics(engine_id)
     trace_id = str(uuid.uuid4())
-    await save_trace(LearningTrace(
-        id=trace_id,
-        agent=routed_agent,
-        query=req.query,
-        final_response=result,
-        session_id=session_id,
-        tokens_in=inf.tokens_in if inf else len(req.query) // 4,
-        tokens_out=inf.tokens_out if inf else len(result) // 4,
-        ttft_ms=inf.ttft_ms if inf else 0.0,
-        throughput_tps=inf.throughput_tps if inf else 0.0,
-        gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
-        vram_used_mb=inf.vram_used_mb if inf else 0.0,
-    ))
 
     async def generator():
-        yield result
+        if effective_query.startswith("__VISION_UNAVAILABLE__"):
+            result = _NO_VISION_MSG
+            yield result
+        elif req.image:
+            from seraphim.agents.core import AgentContext as _AC
+            chat_ag = _build_agent("chat", engine_id)
+            img_ctx = _AC()
+            img_ctx.add_system(chat_ag.system_prompt)
+            img_ctx.add_user(effective_query)
+            result = await chat_ag._chat(img_ctx.messages)
+            yield result
+        else:
+            chunks: list[str] = []
+            async for chunk in ag.stream(effective_query, ctx):
+                chunks.append(chunk)
+                yield chunk
+            result = "".join(chunks)
+
+        await save_message(session_id, "user", req.query, routed_agent)
+        await save_message(session_id, "assistant", result, routed_agent)
+        inf = await _get_engine_metrics(engine_id)
+        await save_trace(LearningTrace(
+            id=trace_id,
+            agent=routed_agent,
+            query=req.query,
+            final_response=result,
+            session_id=session_id,
+            tokens_in=inf.tokens_in if inf else len(req.query) // 4,
+            tokens_out=inf.tokens_out if inf else len(result) // 4,
+            ttft_ms=inf.ttft_ms if inf else 0.0,
+            throughput_tps=inf.throughput_tps if inf else 0.0,
+            gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
+            vram_used_mb=inf.vram_used_mb if inf else 0.0,
+        ))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")
@@ -759,7 +765,7 @@ async def tts_speak(req: TTSRequest):
 async def tts_audio(req: TTSRequest):
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     audio_bytes = await loop.run_in_executor(
         None, partial(synthesize_to_bytes, req.text)
     )

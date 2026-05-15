@@ -18,6 +18,7 @@ from seraphim.engine.base import ChatMessage
 class AgentContext:
     messages: list[ChatMessage] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    session_id: str = ""
 
     def add_user(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -92,6 +93,10 @@ class BaseAgent(ABC):
     @abstractmethod
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         ...
+
+    async def stream(self, query: str, context: "AgentContext | None" = None):
+        """Default: run to completion, yield full result as one chunk. Override for true streaming."""
+        yield await self.run(query, context)
 
     def build_context(self, query: str, context: AgentContext | None = None) -> AgentContext:
         ctx = context or AgentContext()
