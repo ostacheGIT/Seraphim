@@ -1,6 +1,6 @@
+import contextlib
 import io
 import re
-import sys
 import traceback
 
 from seraphim.skills.base import BaseSkill, SkillResult
@@ -11,7 +11,9 @@ _DANGEROUS_PATTERNS = re.compile(
     r"(?:os|subprocess)\s*\.\s*(?:system|popen|Popen|getoutput|call|run)\s*\("
     r"|shutil\s*\.\s*rmtree\s*\("
     r"|os\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\("
-    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil)['\"]"
+    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil|ctypes)['\"]"
+    r"|importlib\s*(?:\.\s*\w+)?\s*\.\s*import_module\s*\(\s*['\"](?:os|subprocess|shutil|ctypes)['\"]"
+    r"|ctypes\s*\.\s*(?:cdll|windll|CDLL|WinDLL|LibraryLoader)"
 )
 
 
@@ -58,15 +60,28 @@ class ReplSkill(BaseSkill):
             self._namespace = {}
 
         buf = io.StringIO()
-        old_stdout, old_stderr = sys.stdout, sys.stderr
         try:
-            sys.stdout = buf
-            sys.stderr = buf
-            exec(code, self._namespace)
+            # redirect_stdout/stderr is context-local — safer than sys.stdout = buf
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                exec(code, self._namespace)  # noqa: S102
             output = buf.getvalue()[:_MAX_OUTPUT]
             return SkillResult(
                 success=True,
                 output=output.strip() or "(executed — no output)",
+            )
+        except SystemExit as exc:
+            captured = buf.getvalue()
+            return SkillResult(
+                success=False,
+                output=captured[:_MAX_OUTPUT] if captured else "",
+                error=f"sys.exit({exc.code}) called — blocked to protect the server",
+            )
+        except KeyboardInterrupt:
+            captured = buf.getvalue()
+            return SkillResult(
+                success=False,
+                output=captured[:_MAX_OUTPUT] if captured else "",
+                error="KeyboardInterrupt raised in code",
             )
         except Exception:
             err = traceback.format_exc()
@@ -76,6 +91,3 @@ class ReplSkill(BaseSkill):
                 output=captured[:_MAX_OUTPUT] if captured else "",
                 error=err[:_MAX_OUTPUT],
             )
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr

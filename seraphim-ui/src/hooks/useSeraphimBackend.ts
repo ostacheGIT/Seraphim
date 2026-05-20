@@ -53,7 +53,8 @@ export async function askSeraphim(
   if (!res.ok) throw new Error(`Backend error: ${res.status}`);
 
   const traceId = res.headers.get("X-Trace-Id");
-  const reader = res.body!.getReader();
+  if (!res.body) throw new Error("Response body is null — streaming not supported");
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let full = "";
   let buffer = "";

@@ -18,6 +18,7 @@ export function useConversation() {
     async function fetchSessions() {
       try {
         const res = await fetch(`${API}/memory/sessions`);
+        if (!res.ok) return;
         const raw = (await res.json()) as {
           session_id: string;
           title: string;
@@ -46,6 +47,7 @@ export function useConversation() {
     setActiveId(id);
     try {
       const res = await fetch(`${API}/memory/sessions/${id}`);
+      if (!res.ok) return;
       const raw2 = (await res.json()) as {
         session: string;
         messages: { role: string; content: string }[];

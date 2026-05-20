@@ -663,48 +663,51 @@ async def chat_stream(req: ChatRequest):
     trace_id = str(uuid.uuid4())
 
     async def generator():
-        if vision_unavailable:
-            result = _NO_VISION_MSG
-            yield result
-        elif req.image:
-            from seraphim.agents.core import AgentContext as _AC
-            chat_ag = _build_agent("chat", engine_id)
-            img_ctx = _AC()
-            img_ctx.add_system(chat_ag.system_prompt)
-            img_ctx.add_user(effective_query)
-            try:
-                result = await chat_ag._chat(img_ctx.messages)
-            except Exception as exc:
-                result = f"⚠️ Erreur LLM : {exc}"
-            yield result
-        else:
-            chunks: list[str] = []
-            try:
-                async for chunk in ag.stream(effective_query, ctx):
-                    chunks.append(chunk)
-                    yield chunk
-            except Exception as exc:
-                error_chunk = f"\n⚠️ Erreur moteur LLM : {exc}"
-                chunks.append(error_chunk)
-                yield error_chunk
-            result = "".join(chunks)
-
-        await save_message(session_id, "user", req.query, routed_agent)
-        await save_message(session_id, "assistant", result, routed_agent)
-        inf = await _get_engine_metrics(engine_id)
-        await save_trace(LearningTrace(
-            id=trace_id,
-            agent=routed_agent,
-            query=req.query,
-            final_response=result,
-            session_id=session_id,
-            tokens_in=inf.tokens_in if inf else len(req.query) // 4,
-            tokens_out=inf.tokens_out if inf else len(result) // 4,
-            ttft_ms=inf.ttft_ms if inf else 0.0,
-            throughput_tps=inf.throughput_tps if inf else 0.0,
-            gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
-            vram_used_mb=inf.vram_used_mb if inf else 0.0,
-        ))
+        result = ""
+        try:
+            if vision_unavailable:
+                result = _NO_VISION_MSG
+                yield result
+            elif req.image:
+                from seraphim.agents.core import AgentContext as _AC
+                chat_ag = _build_agent("chat", engine_id)
+                img_ctx = _AC()
+                img_ctx.add_system(chat_ag.system_prompt)
+                img_ctx.add_user(effective_query)
+                try:
+                    result = await chat_ag._chat(img_ctx.messages)
+                except Exception as exc:
+                    result = f"⚠️ Erreur LLM : {exc}"
+                yield result
+            else:
+                chunks: list[str] = []
+                try:
+                    async for chunk in ag.stream(effective_query, ctx):
+                        chunks.append(chunk)
+                        yield chunk
+                except Exception as exc:
+                    error_chunk = f"\n⚠️ Erreur moteur LLM : {exc}"
+                    chunks.append(error_chunk)
+                    yield error_chunk
+                result = "".join(chunks)
+        finally:
+            # Always save history and trace — even if the client disconnects mid-stream
+            await save_message(session_id, "user", req.query, routed_agent)
+            await save_message(session_id, "assistant", result, routed_agent)
+            inf = await _get_engine_metrics(engine_id)
+            await save_trace(LearningTrace(
+                id=trace_id,
+                agent=routed_agent,
+                query=req.query,
+                final_response=result,
+                session_id=session_id,
+                tokens_in=inf.tokens_in if inf else len(req.query) // 4,
+                tokens_out=inf.tokens_out if inf else len(result) // 4,
+                ttft_ms=inf.ttft_ms if inf else 0.0,
+                throughput_tps=inf.throughput_tps if inf else 0.0,
+                gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
+                vram_used_mb=inf.vram_used_mb if inf else 0.0,
+            ))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")

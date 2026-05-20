@@ -1,5 +1,13 @@
+import asyncio
+
 from seraphim.skills.base import BaseSkill, SkillResult
 from ddgs import DDGS
+
+
+def _ddgs_search(query: str, max_results: int) -> list[dict]:
+    """Blocking DDGS call — must run in executor, not in the event loop."""
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=max_results))
 
 
 class WebSearchSkill(BaseSkill):
@@ -16,8 +24,8 @@ class WebSearchSkill(BaseSkill):
 
     async def run(self, query: str, max_results: int = 5, **kwargs) -> SkillResult:
         try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(None, _ddgs_search, query, max_results)
 
             if not results:
                 return SkillResult(success=False, output="Aucun résultat trouvé.", error="empty")

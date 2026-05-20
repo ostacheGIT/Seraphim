@@ -93,7 +93,7 @@ async def _run_code(code: str, file_path: str | None) -> str:
         except subprocess.TimeoutExpired:
             return "Erreur d'exécution: timeout (30s)"
         except Exception as e:
-            pass  # fall through to code_interpreter
+            logger.debug("_run_code file exec failed (%s), falling back to code_interpreter", e)
     # Fallback: use code_interpreter skill
     skill = SKILL_REGISTRY.get("code_interpreter")
     if skill:
@@ -701,7 +701,7 @@ class ChatAgent(BaseAgent):
 
         return None
 
-    async def run(self, query: str, context: AgentContext = None) -> str:
+    async def run(self, query: str, context: AgentContext | None = None) -> str:
         result = await self._pre_llm_dispatch(query, context)
         if result is not None:
             return result
@@ -749,7 +749,7 @@ class CoderAgent(BaseAgent):
         + _IDENTITY_BLOCK
     )
 
-    async def run(self, query: str, context: AgentContext = None) -> str:
+    async def run(self, query: str, context: AgentContext | None = None) -> str:
         global _pending_code, _pending_file
 
         ctx = self.build_context(query, context)
@@ -915,7 +915,7 @@ class ResearcherAgent(BaseAgent):
         + _IDENTITY_BLOCK
     )
 
-    async def run(self, query: str, context: AgentContext = None) -> str:
+    async def run(self, query: str, context: AgentContext | None = None) -> str:
         ctx = self.build_context(query, context)
         response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
@@ -1204,17 +1204,11 @@ class ReActAgent(BaseAgent):
             response = await self._chat(ctx.messages)
 
             action_match = re.search(r"ACTION:\s*([\w:.\-/]+)", response)
-            args_match   = re.search(r"ARGS:\s*(\{.*?\})", response, re.DOTALL)
 
             if action_match:
                 skill_name = action_match.group(1).strip()
-                args = {}
-                if args_match:
-                    raw = args_match.group(1).replace("\\\\", "\\")
-                    try:
-                        args = json.loads(raw)
-                    except json.JSONDecodeError:
-                        pass
+                # Use brace-counting parser — handles multi-line and nested JSON
+                args = _extract_args_json(response)
 
                 # ── External skill (openclaw / hermes) ───────────────────────
                 tool_failed = False

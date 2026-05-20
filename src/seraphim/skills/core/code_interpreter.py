@@ -12,7 +12,11 @@ _DANGEROUS_PATTERNS = re.compile(
     r"(?:os|subprocess)\s*\.\s*(?:system|popen|Popen|getoutput|call|run)\s*\("
     r"|shutil\s*\.\s*rmtree\s*\("
     r"|os\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\("
-    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil)['\"]"
+    r"|__import__\s*\(\s*['\"](?:os|subprocess|shutil|ctypes)['\"]"
+    # importlib bypass: importlib.import_module("os") / importlib.import_module("subprocess")
+    r"|importlib\s*(?:\.\s*\w+)?\s*\.\s*import_module\s*\(\s*['\"](?:os|subprocess|shutil|ctypes)['\"]"
+    # ctypes direct system calls (shell injection via WinDLL / CDLL)
+    r"|ctypes\s*\.\s*(?:cdll|windll|CDLL|WinDLL|LibraryLoader)"
 )
 
 

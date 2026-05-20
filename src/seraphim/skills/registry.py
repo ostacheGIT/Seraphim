@@ -22,7 +22,11 @@ def discover_skills():
             if obj in _seen_classes:
                 continue
             _seen_classes.add(obj)
-            instance = obj()
+            try:
+                instance = obj()
+            except Exception as exc:
+                logger.warning("Cannot instantiate skill %s: %s — skipping", obj.__name__, exc)
+                continue
             existing = SKILL_REGISTRY.get(instance.name)
             if existing is not None:
                 logger.warning(

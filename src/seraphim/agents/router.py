@@ -181,7 +181,7 @@ def route(query: str) -> RoutingDecision:
     if m:
         expr = m.group("expr").strip()
         words = re.findall(r"[a-zA-Z]{3,}", expr)
-        if not any(w.lower() not in _MATH_FNS for w in words):
+        if all(w.lower() in _MATH_FNS for w in words):
             return RoutingDecision(
                 agent="skill:calculator",
                 skill="calculator",

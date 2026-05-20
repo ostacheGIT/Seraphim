@@ -21,6 +21,20 @@ import aiosqlite
 if TYPE_CHECKING:
     from seraphim.agents.router import RoutingDecision
 
+# Import patterns directly from router — single source of truth, no drift
+from seraphim.agents.router import (
+    _SYSTEM_RE,
+    _CODE_RE,
+    _CODEACT_RE,
+    _FILE_RE,
+    _MATH_RE,
+    _MATH_FNS,
+    _HTTP_RE,
+    _WEB_RE,
+    _MEMORY_RE,
+    _THINK_RE,
+)
+
 _DB_PATH = Path.home() / ".seraphim" / "learning.db"
 _table_ready = False
 
@@ -31,68 +45,14 @@ QUERY_CLASSES = [
     "math", "http", "web", "memory", "think", "chat",
 ]
 
-# Mirrors the patterns in router.py — kept in sync manually
-_SYSTEM_RE = re.compile(
-    r"(?:ouvre|lance|démarre|open|start|volume|son|luminosité|brightness|"
-    r"verrouille|lock|éteins?|shutdown|redémarre|restart|sleep|veille)\b",
-    re.I,
-)
-_CODE_RE = re.compile(
-    r"""(?:
-        (?:écris?|génère|crée|create|write|generate)\s+(?:un\s+)?(?:script|code|programme|function)|
-        (?:exécute|run|lance|execute)\s+(?:ce\s+)?(?:code|script|python)|
-        (?:debug|débugge|corrige|fix)\s+(?:ce\s+)?(?:code|script)|
-        (?:implément|implement)|def\s+\w+\s*\(|import\s+\w+|```python
-    )""",
-    re.I | re.VERBOSE,
-)
-_FILE_RE = re.compile(
-    r"""(?:
-        (?:lis|ouvre|lire|read)\s+(?:le\s+fichier|ce\s+fichier)?\s*["\']?[\w\-\.\/\\~]+\.[a-z]{2,4}|
-        (?:écris?|sauvegarde|write|save)\s+(?:dans\s+)?\s*["\']?[\w\-\.\/\\~]+\.[a-z]{2,4}|
-        (?:liste|list|affiche|show)\s+(?:les\s+)?(?:fichiers?|dossiers?|files?)\b|
-        ~/|C:\\\\|D:\\\\|/home/|/etc/
-    )""",
-    re.I | re.VERBOSE,
-)
-_MATH_RE = re.compile(
-    r"""^(?:calcule?\s+|compute\s+)?
-    (?P<expr>[\d\s\+\-\*\/\%\(\)\.\,\^]+
-    |(?:sqrt|sin|cos|tan|log|abs|round|min|max|pi|e)\b.*)
-    [?!.\s]*$""",
-    re.I | re.VERBOSE,
-)
-_MATH_FNS = {"sqrt", "sin", "cos", "tan", "log", "abs", "round", "min", "max", "pi"}
-_HTTP_RE = re.compile(
-    r"(?:requête|request|fetch|curl|http\s+request)\s+(?:GET|POST|PUT|DELETE|PATCH|sur\s+)?https?://"
-    r"|(?:GET|POST|PUT|DELETE|PATCH)\s+https?://",
-    re.I,
-)
-_WEB_RE = re.compile(
-    r"""(?:
-        (?:cherche|recherche|search|trouve|find|googl)\s+|
-        (?:actualité|news|météo|weather|température|temperature)\b|
-        (?:prix\s+(?:de|du)|price\s+of)\b|
-        https?://\S+
-    )""",
-    re.I | re.VERBOSE,
-)
-_MEMORY_RE = re.compile(
-    r"(?:souviens?-?toi|remember|mémorise|note\s+que|retiens?)\b",
-    re.I,
-)
-_THINK_RE = re.compile(
-    r"(?:réfléchis|pense|analyse|évalue|compare|explique\s+(?:pourquoi|comment)|"
-    r"explain\s+(?:why|how)|think\s+about|raisonne|pros?\s+(?:et|and)\s+cons?)",
-    re.I,
-)
-
 
 def classify_query(query: str) -> str:
     """Map query to one of QUERY_CLASSES."""
     q = query.strip()
     if _SYSTEM_RE.search(q):
         return "system"
+    if _CODEACT_RE.search(q):
+        return "code_exec"
     if _CODE_RE.search(q):
         if re.search(r"(?:exécute|run|execute|lance)\s+(?:ce\s+)?(?:code|script)", q, re.I):
             return "code_exec"
@@ -102,7 +62,7 @@ def classify_query(query: str) -> str:
     m = _MATH_RE.match(q)
     if m:
         words = re.findall(r"[a-zA-Z]{3,}", m.group("expr").strip())
-        if not any(w.lower() not in _MATH_FNS for w in words):
+        if all(w.lower() in _MATH_FNS for w in words):
             return "math"
     if _HTTP_RE.search(q):
         return "http"

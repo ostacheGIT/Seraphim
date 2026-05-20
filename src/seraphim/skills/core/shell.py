@@ -50,15 +50,9 @@ class ShellSkill(BaseSkill):
     @staticmethod
     def _fix_win_command(cmd: str) -> str:
         """Quote unquoted URLs containing & so PowerShell doesn't split them."""
-        def _quote_url(m: re.Match) -> str:
-            url = m.group(0)
-            # Already quoted — leave as-is
-            return url
-        # Find unquoted URLs with query params (contain & outside of quotes)
-        # Pattern: https?://... with & not already surrounded by " or '
         return re.sub(
             r'(?<!["\'])https?://\S+',
-            lambda m: f'"{m.group(0)}"' if "&" in m.group(0) and not m.group(0).startswith('"') else m.group(0),
+            lambda m: f'"{m.group(0)}"' if "&" in m.group(0) else m.group(0),
             cmd,
         )
 

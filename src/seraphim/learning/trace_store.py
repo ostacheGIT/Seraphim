@@ -12,6 +12,7 @@ from typing import Any
 import aiosqlite
 
 _DB_PATH = Path.home() / ".seraphim" / "learning.db"
+_db_ready = False
 
 
 @dataclass
@@ -135,7 +136,10 @@ async def init_db() -> None:
 
 
 async def save_trace(trace: Trace) -> None:
-    await init_db()
+    global _db_ready
+    if not _db_ready:
+        await init_db()
+        _db_ready = True
     async with aiosqlite.connect(_DB_PATH) as db:
         await db.execute(
             """INSERT OR REPLACE INTO traces
@@ -167,12 +171,19 @@ async def save_trace(trace: Trace) -> None:
         pass  # never block trace saving
 
 
+async def _ensure_db() -> None:
+    global _db_ready
+    if not _db_ready:
+        await init_db()
+        _db_ready = True
+
+
 async def load_traces(
     agent: str | None = None,
     min_feedback: float = -1.0,
     limit: int = 200,
 ) -> list[Trace]:
-    await init_db()
+    await _ensure_db()
     conditions = []
     params: list[Any] = []
     if agent:
@@ -299,7 +310,7 @@ async def load_overlay_history(target: str, limit: int = 10) -> list[dict[str, A
 
 
 async def trace_stats() -> dict[str, Any]:
-    await init_db()
+    await _ensure_db()
     async with aiosqlite.connect(_DB_PATH) as db:
         cur = await db.execute("SELECT COUNT(*) FROM traces")
         total = (await cur.fetchone())[0]
