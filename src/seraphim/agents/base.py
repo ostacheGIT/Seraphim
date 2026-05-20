@@ -137,6 +137,41 @@ def _extract_math_expr(query: str) -> str | None:
 
 
 # ── Détection directe — bypass LLM total pour les commandes système ───────────
+def _resolve_folder(name: str) -> str:
+    """Résout un nom de dossier courant (downloads, bureau…) vers son chemin absolu."""
+    import os
+    home = Path.home()
+    clean = re.sub(
+        r"^(?:le\s+|la\s+|l['\s]+|mon\s+|ma\s+|mes\s+|the\s+|my\s+|dossier\s+|folder\s+)",
+        "", name.strip().strip("'\"").lower()
+    ).strip()
+    known = {
+        "downloads": home / "Downloads",
+        "téléchargements": home / "Downloads",
+        "telechargements": home / "Downloads",
+        "desktop": home / "Desktop",
+        "bureau": home / "Desktop",
+        "documents": home / "Documents",
+        "pictures": home / "Pictures",
+        "images": home / "Pictures",
+        "photos": home / "Pictures",
+        "music": home / "Music",
+        "musique": home / "Music",
+        "videos": home / "Videos",
+        "vidéos": home / "Videos",
+        "appdata": home / "AppData",
+        "temp": Path(os.environ.get("TEMP", str(home / "AppData/Local/Temp"))),
+        "program files": Path("C:/Program Files"),
+        "programme files": Path("C:/Program Files"),
+    }
+    if clean in known:
+        return str(known[clean])
+    original = name.strip().strip("'\"")
+    if re.match(r"^[a-zA-Z]:[/\\]", original) or original.startswith("/") or original.startswith("~"):
+        return original
+    return str(home / original)
+
+
 DIRECT_PATTERNS = [
     (re.compile(r"(?:ouvre|lance|démarre|open|start)\s+(\w+)", re.I),
      lambda m: ("open_app", {"app": m.group(1)})),
@@ -226,6 +261,98 @@ _CLIPBOARD_RE = re.compile(
     re.I,
 )
 
+_SYSINFO_RE = re.compile(
+    r"\b(?:"
+    r"info(?:s)?\s+(?:ram|cpu|gpu|pc|système|system|ordi(?:nateur)?|matériel|hardware)|"
+    r"(?:combien\s+(?:de\s+)?|how\s+much\s+|how\s+many\s+)?(?:ram|mémoire\s+(?:vive)?)\b|"
+    r"(?:usage|utilisation|taux)\s+(?:cpu|mémoire|ram|disque|disk|processeur)|"
+    r"(?:quel(?:le)?\s+(?:est\s+)?(?:mon\s+)?|what(?:'s|\s+is)?\s+(?:my\s+)?)?(?:cpu|processeur)\b|"
+    r"(?:quel(?:le)?\s+(?:est\s+)?(?:ma\s+|mon\s+)?|what(?:'s|\s+is)?\s+(?:my\s+)?)?(?:gpu|carte\s+graphique)\b|"
+    r"(?:uptime|depuis\s+quand\s+(?:le\s+)?(?:pc|ordi|windows))|"
+    r"(?:version\s+(?:de\s+)?windows|windows\s+version|quelle\s+version\s+de\s+windows)|"
+    r"(?:batterie|battery|niveau\s+(?:de\s+)?charge)\b|"
+    r"(?:état|etat|status|snapshot)\s+(?:du\s+)?(?:système|system|pc|ordi(?:nateur)?)|"
+    r"performances?\s+(?:du\s+)?(?:pc|système|ordi(?:nateur)?|system)|"
+    r"température\s+(?:cpu|gpu|système|ordi)|"
+    r"diagnostic\s+(?:pc|système|ordi)|"
+    r"infos?\s+(?:pc|système|system|matériel|hardware)"
+    r")\b",
+    re.I,
+)
+
+_PROCLIST_RE = re.compile(
+    r"\b(?:"
+    r"(?:liste(?:r)?|montre(?:r)?|affiche(?:r)?|show|list)\s+(?:les\s+)?(?:processus|process(?:es)?|tâches?|tasks?)|"
+    r"(?:quels?\s+(?:programmes?|processus|process|applications?)\s+(?:tournent|tournant|(?:sont\s+)?en\s+cours|(?:sont\s+)?actifs?))|"
+    r"running\s+(?:process(?:es)?|apps?|programs?)|"
+    r"(?:gestionnaire\s+(?:de\s+)?tâches?|task\s+manager)"
+    r")\b",
+    re.I,
+)
+
+_DISKINFO_RE = re.compile(
+    r"\b(?:"
+    r"(?:espace\s+(?:disque|disk|disponible|libre|restant|stockage))|"
+    r"(?:disk\s+(?:space|usage|info))|"
+    r"(?:stockage\s+(?:disponible|libre|restant|total|utilisé))|"
+    r"(?:combien\s+(?:d[' e])?espace|how\s+much\s+(?:space|storage))|"
+    r"(?:occupation\s+(?:du\s+)?disque)"
+    r")\b",
+    re.I,
+)
+
+_NETINFO_RE = re.compile(
+    r"\b(?:"
+    r"(?:infos?\s+(?:réseau|network|wifi|connexion|ip))|"
+    r"(?:(?:mon\s+)?(?:adresse\s+)?ip(?:\s+publique|\s+locale|\s+privée)?)|"
+    r"(?:wifi\s+(?:infos?|status|connexion|connecté|ssid|signal))|"
+    r"(?:réseau\s+(?:actuel|infos?|status))|"
+    r"(?:quelle\s+(?:est\s+)?(?:mon\s+)?(?:ip|connexion\s+internet))"
+    r")\b",
+    re.I,
+)
+
+_APPLIST_RE = re.compile(
+    r"(?:"
+    # requête ultra-courte : juste "applications ?" / "logiciels ?" / "apps ?"
+    r"^(?:applications?|logiciels?|programmes?|apps?|software)\s*[?!.]?\s*$|"
+    r"\b(?:"
+    r"(?:(?:applications?|logiciels?|programmes?|apps?)\s+install[eé]e?s?)|"
+    r"(?:install[eé]e?s?\s+(?:applications?|logiciels?|programmes?|apps?))|"
+    r"(?:installed\s+(?:apps?|software|programs?))|"
+    r"(?:liste(?:r)?\s+(?:les\s+)?(?:applications?|logiciels?|programmes?|apps?)(?:\s+install[eé]e?s?)?)|"
+    r"(?:quel(?:le)?s?\s+(?:sont\s+(?:les\s+)?)?(?:logiciels?|programmes?|applications?|apps?)(?:\s+install[eé]e?s?)?)|"
+    r"(?:tou(?:te)?s?\s+(?:(?:les|mes|tes|vos)\s+)?(?:logiciels?|programmes?|applications?|apps?)(?:\s+install[eé]e?s?)?)"
+    r")\b"
+    r")",
+    re.I,
+)
+
+# Détecte "est-ce que X est installé ?", "X est-il installé ?", "as-tu X installé ?"
+_APP_CHECK_RE = re.compile(
+    r"(?:"
+    r"est[-\s]ce\s+qu[e']\s+(.+?)\s+(?:est\s+)?install[eé]e?s?|"
+    r"(.+?)\s+est[-\s]il\s+install[eé]e?s?|"
+    r"(?:tu\s+as|as[-\s]tu)\s+(.+?)\s+(?:d')?install[eé]e?s?"
+    r")\s*[?!.]?\s*$",
+    re.I,
+)
+
+
+def _sysinfo_section(query: str) -> str:
+    q = query.lower()
+    if any(x in q for x in ["ram", "mémoire", "memory"]):
+        return "ram"
+    if any(x in q for x in ["cpu", "processeur", "processor"]):
+        return "cpu"
+    if any(x in q for x in ["gpu", "graphique", "graphics"]):
+        return "gpu"
+    if any(x in q for x in ["batterie", "battery", "charge"]):
+        return "battery"
+    if any(x in q for x in ["windows", "version", " os "]):
+        return "os"
+    return "all"
+
 
 async def _inject_clipboard(query: str) -> str:
     """If query contains clipboard intent, prepend fresh clipboard content."""
@@ -260,12 +387,13 @@ _CAPABILITIES_RE = re.compile(
 )
 
 _SKILL_CATEGORIES: dict[str, list[str]] = {
-    "Web & Browser":  ["web_search", "browser_search", "browser_navigate", "browser_list", "http_request"],
-    "System":         ["open_app", "set_volume", "set_brightness", "system_control", "list_files", "read_file", "write_file", "shell"],
-    "Intelligence":   ["think", "calculator", "code_interpreter", "repl"],
-    "Information":    ["morning_digest"],
-    "Memory":         ["memory_store", "memory_search", "memory_recall"],
-    "Monitoring":     ["monitor_add", "monitor_list", "monitor_run"],
+    "Web & Browser":       ["web_search", "browser_search", "browser_navigate", "browser_list", "http_request"],
+    "System — Diagnostic": ["system_info", "process_list", "disk_info", "network_info", "installed_apps", "windows_settings", "process_kill"],
+    "System — Control":    ["open_app", "set_volume", "set_brightness", "system_control", "list_files", "read_file", "write_file", "shell"],
+    "Intelligence":        ["think", "calculator", "code_interpreter", "repl"],
+    "Information":         ["morning_digest"],
+    "Memory":              ["memory_store", "memory_search", "memory_recall"],
+    "Monitoring":          ["monitor_add", "monitor_list", "monitor_run"],
 }
 
 
@@ -355,6 +483,7 @@ _IDENTITY_BLOCK = (
     "If asked who you are: always answer 'I am Seraphim'.\n"
     "NEVER say 'as an AI I have no internet access' — you DO have web search via your tools.\n"
     "NEVER say 'I cannot access external resources' — you CAN search the web.\n"
+    "NEVER say 'I cannot access system information' — you CAN read PC info (RAM, CPU, GPU, disk, network, etc.) via the system_info tool.\n"
     "When you searched the web in a previous message, say so clearly: 'I found this by searching the web.'\n"
     "=== END IDENTITY ==="
 )
@@ -507,6 +636,60 @@ class ChatAgent(BaseAgent):
                 result = await skill.run(no_summary=True)
                 return result.output if result.success else f"Digest error: {result.error}"
 
+        if _SYSINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("system_info")
+            if skill:
+                section = _sysinfo_section(query)
+                result = await skill.run(section=section)
+                return result.output if result.success else f"Erreur infos système: {result.error}"
+
+        if _PROCLIST_RE.search(query):
+            skill = SKILL_REGISTRY.get("process_list")
+            if skill:
+                sort_by = "ram" if "ram" in query.lower() else "cpu"
+                result = await skill.run(sort_by=sort_by, limit=20)
+                return result.output if result.success else f"Erreur processus: {result.error}"
+
+        if _DISKINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("disk_info")
+            if skill:
+                result = await skill.run()
+                return result.output if result.success else f"Erreur disque: {result.error}"
+
+        if _NETINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("network_info")
+            if skill:
+                result = await skill.run()
+                return result.output if result.success else f"Erreur réseau: {result.error}"
+
+        m = _APP_CHECK_RE.search(query)
+        if m:
+            app_name = next((g for g in m.groups() if g), "").strip()
+            if app_name and 1 < len(app_name) < 60:
+                skill = SKILL_REGISTRY.get("installed_apps")
+                if skill:
+                    result = await skill.run(filter=app_name, limit=5)
+                    if result.success:
+                        apps = (result.data or {}).get("apps", [])
+                        if apps:
+                            first = apps[0]
+                            answer = f"✅ Oui, **{first.get('name', app_name)}**"
+                            ver = first.get("version")
+                            if ver:
+                                answer += f" v{ver}"
+                            answer += " est installé."
+                            others = [a.get("name") for a in apps[1:3] if a.get("name")]
+                            if others:
+                                answer += f"\n   Aussi : {', '.join(others)}"
+                            return answer
+                        return f"❌ **{app_name}** ne semble pas installé sur ce PC."
+
+        if _APPLIST_RE.search(query):
+            skill = SKILL_REGISTRY.get("installed_apps")
+            if skill:
+                result = await skill.run(limit=200)
+                return result.output if result.success else f"Erreur applications: {result.error}"
+
         for pattern, builder in DIRECT_PATTERNS:
             m = pattern.search(query)
             if m:
@@ -529,6 +712,9 @@ class ChatAgent(BaseAgent):
         if tool_calls:
             return await _dispatch_skill_tool_calls(tool_calls, query)
         ctx.add_assistant(response)
+        # Self-correct if the response contains Python code with syntax errors
+        from seraphim.agents.verification import self_correct_code
+        response = await self_correct_code(self, query, response, ctx)
         return response
 
     async def stream(self, query: str, context: AgentContext | None = None):
@@ -539,11 +725,15 @@ class ChatAgent(BaseAgent):
         query = await _inject_clipboard(query)
         ctx = self.build_context(query, context)
         eng = self.engine
-        if hasattr(eng, "stream_chat_api"):
-            async for chunk in eng.stream_chat_api(ctx.messages):
-                yield chunk
-        else:
-            yield await self._chat(ctx.messages)
+        try:
+            if hasattr(eng, "stream_chat_api"):
+                async for chunk in eng.stream_chat_api(ctx.messages):
+                    yield chunk
+            else:
+                yield await self._chat(ctx.messages)
+        except Exception as exc:
+            logger.error("LLM stream error in %s: %s", self.name, exc)
+            yield f"\n⚠️ Erreur moteur LLM : {exc}"
 
 class CoderAgent(BaseAgent):
     name = "coder"
@@ -581,6 +771,24 @@ class CoderAgent(BaseAgent):
             return response
 
         code = code_m.group(1).strip()
+
+        # Self-correct syntax errors before presenting to user
+        from seraphim.agents.verification import check_python_syntax
+        syntax_err = check_python_syntax(code)
+        if syntax_err:
+            ctx.messages.append({
+                "role": "user",
+                "content": (
+                    f"The code has a syntax error: {syntax_err}\n\n"
+                    "Please fix it. Keep the same FILENAME: + ```python format."
+                ),
+            })
+            response = await self._chat(ctx.messages)
+            ctx.add_assistant(response)
+            code_m2 = re.search(r"```python\n(.*?)\n```", response, re.DOTALL) or re.search(r"```\n(.*?)\n```", response, re.DOTALL)
+            if code_m2:
+                code = code_m2.group(1).strip()
+
         _pending_code = code
 
         # Write to ~/seraphim_workspace/
@@ -672,6 +880,16 @@ class CodeActAgent(BaseAgent):
             code = code_match.group(1).strip()
             ctx.add_assistant(response)
 
+            # Syntax check before executing — avoid wasting a subprocess call
+            from seraphim.agents.verification import check_python_syntax
+            syntax_err = check_python_syntax(code)
+            if syntax_err:
+                ctx.messages.append({
+                    "role": "user",
+                    "content": f"Syntax error (code not executed): {syntax_err}\n\nFix the code and try again.",
+                })
+                continue
+
             result = await code_skill.run(code=code)
             obs = result.output if result.success else f"Error:\n{result.error}"
             if len(obs) > _MAX_OUTPUT:
@@ -687,10 +905,13 @@ class CodeActAgent(BaseAgent):
 
 class ResearcherAgent(BaseAgent):
     name = "researcher"
-    description = "Research assistant: summarisation, QA on documents, analysis"
+    description = "Research assistant: summarisation, QA on documents, analysis, self-correction"
     system_prompt = (
         "You are Seraphim in researcher mode. You specialise in synthesising information, "
-        "finding patterns, and producing well-structured, cited answers. "
+        "finding patterns, and producing well-structured, cited answers.\n\n"
+        "If the conversation history shows that your previous answer was wrong or incomplete, "
+        "acknowledge the mistake briefly, then give a corrected, more thorough answer. "
+        "Do not apologise excessively — just correct and move on.\n"
         + _IDENTITY_BLOCK
     )
 
@@ -698,6 +919,9 @@ class ResearcherAgent(BaseAgent):
         ctx = self.build_context(query, context)
         response = await self._chat(ctx.messages)
         ctx.add_assistant(response)
+        # Self-correct code blocks if they have syntax errors
+        from seraphim.agents.verification import self_correct_code
+        response = await self_correct_code(self, query, response, ctx)
         return response
 
 
@@ -728,7 +952,13 @@ class ReActAgent(BaseAgent):
             "- shell: run any shell/CLI command. Args: {\"command\": \"agent-browser screenshot https://...\", \"timeout\": 60}\n"
             "- browser_navigate: open URL in real browser (Chrome/Edge), read page content or take screenshot. Args: {\"url\": \"https://...\", \"action\": \"read|snapshot|screenshot\", \"browser\": \"auto|chrome|edge|firefox\", \"output_file\": \"shot.png\"}\n"
             "- browser_search: search the web using a real browser. ALWAYS use engine='bing'. For technical topics (code, libraries, software), translate query to English for better results. Args: {\"query\": \"...\", \"engine\": \"bing\", \"browser\": \"auto\"}\n"
-            "- browser_list: list installed browsers on this PC. Args: {}\n\n"
+            "- browser_list: list installed browsers on this PC. Args: {}\n"
+            "- system_info: get PC info — CPU, RAM, GPU, battery, OS, uptime. Args: {\"section\": \"all|cpu|ram|gpu|battery|os\"}\n"
+            "- process_list: list running processes. Args: {\"sort_by\": \"cpu|ram|name\", \"limit\": 20}\n"
+            "- disk_info: disk space and usage per drive. Args: {\"path\": \"\"}\n"
+            "- network_info: network adapters, WiFi SSID/signal, public IP, ping. Args: {}\n"
+            "- installed_apps: list/manage installed apps. Args: {\"action\": \"list|add_to_category|remove_from_category|list_categories\", \"filter\": \"\", \"app\": \"\", \"category\": \"jeux|dev|créatif|internet|productivité|launcher|système|autres\"}\n"
+            "- windows_settings: power plan, firewall, timezone, startup, Windows updates. Args: {\"section\": \"all\"}\n\n"
             "IMPORTANT RULES:\n"
             "1. Always use forward slashes in paths, never backslashes.\n"
             "2. After receiving a RESULT, give your final answer using ONLY that result.\n"
@@ -854,6 +1084,61 @@ class ReActAgent(BaseAgent):
                 result = await skill.run(no_summary=True)
                 return result.output if result.success else f"Digest error: {result.error}"
 
+        # ── System diagnostics — bypass LLM ─────────────────────────────────
+        if _SYSINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("system_info")
+            if skill:
+                section = _sysinfo_section(query)
+                result = await skill.run(section=section)
+                return result.output if result.success else f"Erreur infos système: {result.error}"
+
+        if _PROCLIST_RE.search(query):
+            skill = SKILL_REGISTRY.get("process_list")
+            if skill:
+                sort_by = "ram" if "ram" in query.lower() else "cpu"
+                result = await skill.run(sort_by=sort_by, limit=20)
+                return result.output if result.success else f"Erreur processus: {result.error}"
+
+        if _DISKINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("disk_info")
+            if skill:
+                result = await skill.run()
+                return result.output if result.success else f"Erreur disque: {result.error}"
+
+        if _NETINFO_RE.search(query):
+            skill = SKILL_REGISTRY.get("network_info")
+            if skill:
+                result = await skill.run()
+                return result.output if result.success else f"Erreur réseau: {result.error}"
+
+        m = _APP_CHECK_RE.search(query)
+        if m:
+            app_name = next((g for g in m.groups() if g), "").strip()
+            if app_name and 1 < len(app_name) < 60:
+                skill = SKILL_REGISTRY.get("installed_apps")
+                if skill:
+                    result = await skill.run(filter=app_name, limit=5)
+                    if result.success:
+                        apps = (result.data or {}).get("apps", [])
+                        if apps:
+                            first = apps[0]
+                            answer = f"✅ Oui, **{first.get('name', app_name)}**"
+                            ver = first.get("version")
+                            if ver:
+                                answer += f" v{ver}"
+                            answer += " est installé."
+                            others = [a.get("name") for a in apps[1:3] if a.get("name")]
+                            if others:
+                                answer += f"\n   Aussi : {', '.join(others)}"
+                            return answer
+                        return f"❌ **{app_name}** ne semble pas installé sur ce PC."
+
+        if _APPLIST_RE.search(query):
+            skill = SKILL_REGISTRY.get("installed_apps")
+            if skill:
+                result = await skill.run(limit=200)
+                return result.output if result.success else f"Erreur applications: {result.error}"
+
         # Skip web_search DIRECT_PATTERN if browser keyword present
         _skip_web_direct = bool(_BROWSER_KW.search(query))
         if not _skip_web_direct:
@@ -932,6 +1217,7 @@ class ReActAgent(BaseAgent):
                         pass
 
                 # ── External skill (openclaw / hermes) ───────────────────────
+                tool_failed = False
                 if skill_name.startswith("skill:"):
                     ext_name = skill_name[6:]
                     try:
@@ -943,8 +1229,10 @@ class ReActAgent(BaseAgent):
                             f"Skill '{ext_name}' non trouvé dans le cache. "
                             "Lance : seraphim skill sync-all"
                         )
+                        tool_failed = True
                     except Exception as e:
                         tool_output = f"Skill error ({ext_name}): {e}"
+                        tool_failed = True
 
                 # ── Built-in skill ────────────────────────────────────────────
                 else:
@@ -952,23 +1240,36 @@ class ReActAgent(BaseAgent):
                         skill = SKILL_REGISTRY[skill_name]
                         result = await skill.run(**args)
                         tool_output = result.output if result.success else f"Error: {result.error}"
+                        tool_failed = not result.success
                     except KeyError:
                         tool_output = f"Skill '{skill_name}' inconnu."
+                        tool_failed = True
                     except Exception as e:
                         tool_output = f"Skill error: {type(e).__name__}: {e}"
+                        tool_failed = True
 
                 _tracer.record_step(skill_name, args, tool_output)
 
                 ctx.messages.append({"role": "assistant", "content": response})
-                ctx.messages.append({
-                    "role": "user",
-                    "content": (
-                        f"Tool result ({skill_name}):\n{tool_output}\n\n"
-                        "Summarize the above result in plain language. "
-                        "Do NOT repeat the raw output. Do NOT say ACTION or ARGS. "
-                        "Just give a short, clear answer."
-                    )
-                })
+                if tool_failed:
+                    ctx.messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Tool '{skill_name}' failed: {tool_output}\n\n"
+                            "Try a different approach, different arguments, or a different tool. "
+                            "Do NOT repeat the exact same failing call."
+                        )
+                    })
+                else:
+                    ctx.messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Tool result ({skill_name}):\n{tool_output}\n\n"
+                            "Summarize the above result in plain language. "
+                            "Do NOT repeat the raw output. Do NOT say ACTION or ARGS. "
+                            "Just give a short, clear answer."
+                        )
+                    })
 
             else:
                 ctx.add_assistant(response)

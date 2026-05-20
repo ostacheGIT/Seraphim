@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from seraphim.agents.verification import is_user_correction
+
 # ── Patterns de détection ──────────────────────────────────────────────────────
 
 _MATH_RE = re.compile(
@@ -27,7 +29,19 @@ _MATH_FNS = {"sqrt", "sin", "cos", "tan", "log", "abs", "round", "min", "max", "
 
 _SYSTEM_RE = re.compile(
     r"(?:ouvre|lance|démarre|open|start|volume|son|luminosité|brightness|"
-    r"verrouille|lock|éteins?|shutdown|redémarre|restart|sleep|veille)\b",
+    r"verrouille|lock|éteins?|shutdown|redémarre|restart|sleep|veille|"
+    r"ram\b|cpu\b|gpu\b|mémoire\b|memory\b|batterie\b|battery\b|"
+    r"(?:infos?\s+(?:pc|système|system|ram|cpu|gpu|ordi))|"
+    r"(?:état\s+(?:du\s+)?(?:système|pc|ordi))|"
+    r"(?:espace\s+disque|disk\s+space)|"
+    r"(?:processus|process(?:es)?)\b|"
+    r"(?:réseau|wifi|adresse\s+ip)|"
+    r"(?:performances?\s+(?:pc|système))|"
+    r"install[eé][es]?\b|logiciel\b|"
+    r"(?:applications?|programmes?|apps?)\s+install|"
+    r"(?:liste(?:r)?\s+(?:les\s+)?(?:applications?|logiciels?|programmes?))|"
+    r"diagnostic\b|uptime\b)\b|"
+    r"^(?:applications?|logiciels?|programmes?|apps?|software)\s*[?!.]?\s*$",
     re.I,
 )
 
@@ -105,6 +119,18 @@ _THINK_RE = re.compile(
     re.I | re.VERBOSE,
     )
 
+# Reclassification / apprentissage de catégories
+_RECLASSIFY_RE = re.compile(
+    r"(?:"
+    r"il\s+manque\b|"
+    r"(?:ajoute[rz]?|rajoute[rz]?|mets?|add)\s+\S.{0,40}(?:dans|in|to|à|au|en)\s|"
+    r"(?:mal\s+classé[e]?|mauvaise\s+catégorie|wrong\s+category)|"
+    r"(?:reclassif|déplace[rz]?\s+\S.{0,40}(?:dans|vers))|"
+    r"(?:catégorie[sz]?\s+personnalis)"
+    r")",
+    re.I,
+)
+
 
 @dataclass
 class RoutingDecision:
@@ -119,6 +145,14 @@ def route(query: str) -> RoutingDecision:
     Ordre de priorité : system > code > files > math > web > memory > think > chat
     """
     q = query.strip()
+
+    # 0. Reclassification d'apps → react (a accès au skill installed_apps)
+    if _RECLASSIFY_RE.search(q):
+        return RoutingDecision(agent="react", skill=None, reason="app category learning request")
+
+    # 0b. User explicitly correcting a wrong answer → researcher for deeper analysis
+    if is_user_correction(q):
+        return RoutingDecision(agent="researcher", skill=None, reason="user correction — deeper analysis")
 
     # 1. Commandes système directes → react agent (il a les DIRECT_PATTERNS)
     if _SYSTEM_RE.search(q):

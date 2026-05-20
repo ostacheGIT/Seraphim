@@ -487,35 +487,389 @@ if ($r) {{
         return SkillResult(success=True, output="\n".join(lines))
 
 
+# ── Installed Apps — helpers ──────────────────────────────────────────────────
+
+import json as _json
+import re as _re
+from pathlib import Path as _Path
+
+# Config de catégories personnalisées, spécifique à chaque machine
+_CATS_CONFIG: _Path = _Path.home() / ".seraphim" / "app_categories.json"
+_custom_cache: dict | None = None
+
+
+def _load_custom() -> dict[str, list[str]]:
+    global _custom_cache
+    if _custom_cache is None:
+        try:
+            if _CATS_CONFIG.exists():
+                _custom_cache = _json.loads(_CATS_CONFIG.read_text(encoding="utf-8")).get("custom", {})
+            else:
+                _custom_cache = {}
+        except Exception:
+            _custom_cache = {}
+    return _custom_cache
+
+
+def _save_custom(custom: dict[str, list[str]]) -> None:
+    global _custom_cache
+    try:
+        _CATS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        _CATS_CONFIG.write_text(_json.dumps({"version": 1, "custom": custom}, ensure_ascii=False, indent=2), encoding="utf-8")
+        _custom_cache = custom
+    except Exception:
+        pass
+
+# (emoji, label, name_substrings, publisher_substrings)
+_APP_CATS = [
+    ("🎮", "Jeux", [
+        "call of duty", "need for speed", "elden ring", "hades", "hollow knight",
+        "darkest dungeon", "dead by daylight", "lethal company", "brawlhalla",
+        "metro 2033", "dying light", "garry's mod", "death stranding", "a plague tale",
+        "ark: survival", "jurassic", "among us", "blasphemous", "into the dead",
+        "burglin", "2xko", "league of legends", "legends of runeterra", "valorant",
+        "overwatch", "diablo", "hearthstone", "minecraft", "silksong",
+    ], [
+        "riot games", "studio wildcard", "team cherry", "behaviour interactive",
+        "zeekerss", "blue mammoth games", "gog.com", "game kitchen", "innersloth",
+        "facepunch studios", "kojima productions", "fobri", "frontier developments",
+        "team peak", "r.g. mechanics", "torrent-igruha.org",
+    ]),
+    ("💻", "Développement", [
+        "android studio", "visual studio code", "intellij idea", "clion", "phpstorm",
+        "datagrip", "webstorm", "goland", "node.js", "git ", "mysql workbench",
+        "mysql server", "mysql router", "mysql shell", "mysql installer",
+        "mysql documents", "mysql examples", "postman", "gns3", "cisco packet tracer",
+        "virtualbox", "eclipse temurin", "miktex", "npcap", "notepad++",
+        "powershell 7", "composer - php", "wireshark", "putty", "winscp",
+        "python 3", "python 3.", "python launcher",
+    ], [
+        "jetbrains s.r.o.", "oracle corporation", "git development community",
+        "node.js foundation", "nmap project", "gns3 technology", "cisco systems",
+        "notepad++ team", "oracle and/or its affiliates", "getcomposer.org",
+        "python software foundation",
+    ]),
+    ("🎨", "Créatif & Médias", [
+        "adobe photoshop", "adobe acrobat", "adobe premiere", "adobe after effects",
+        "obs studio", "handbrake", "capcut", "cinema 4d", "magic bullet", "ffmpeg",
+        "audacity", "blender", "davinci resolve",
+    ], [
+        "obs project", "maxon computer gmbh", "gyan", "bytedance pte. ltd.",
+    ]),
+    ("🌐", "Internet & Réseau", [
+        "google chrome", "mozilla firefox", "discord", "cloudflare warp", "expressvpn",
+        "comet", "blitz", "microsoft teams meeting",
+    ], [
+        "mozilla", "discord inc.", "cloudflare, inc.", "expressvpn",
+    ]),
+    ("📝", "Productivité", [
+        "microsoft 365", "libreoffice", "obsidian", "onenote",
+        "docs 1.0", "gmail 1.0", "feuilles de calcul", "google drive 1.0",
+        "google•drive", "microsoft onedrive",
+    ], [
+        "the document foundation", "obsidian",
+    ]),
+    ("🚀", "Launchers & Plateformes", [
+        "epic games launcher", "battle.net", "overwolf", "porofessor",
+        "hoyoplay", "ankama launcher", "blitz 2", "steam",
+        "launcher prerequisites", "epic online services",
+    ], [
+        "blizzard entertainment", "overwolf ltd.", "cognosphere pte. ltd.", "ankama",
+        "balena inc.", "blitz, inc.",
+    ]),
+]
+
+# Patterns de condensation (label affiché, regex sur le nom)
+_COLLAPSE = [
+    ("Microsoft Visual C++ Redistributables",
+     _re.compile(r"microsoft visual c\+\+", _re.I)),
+    ("Microsoft .NET Runtimes",
+     _re.compile(r"microsoft \.net (host|runtime|windows desktop)", _re.I)),
+    ("NVIDIA Services & Containers",
+     _re.compile(r"nvidia (container|backend|session container|localsystem container|"
+                 r"user container|aiuser container|messagebus|watchdog|telemetry|"
+                 r"install application|nvcpl|nvdlisr|shadowplay|virtual audio|"
+                 r"usbc driver|platform controllers|framerview)", _re.I)),
+    ("Office Click-to-Run Components",
+     _re.compile(r"office 16 click-to-run", _re.I)),
+    ("Microsoft Visual Studio Setup",
+     _re.compile(r"microsoft visual studio (setup|installer|configuration|wmi)", _re.I)),
+    ("Application Verifier / Kits",
+     _re.compile(r"(application verifier|kits configuration|msi development tools)", _re.I)),
+]
+
+_CAT_ORDER = [
+    "🎮 Jeux", "💻 Développement", "🎨 Créatif & Médias",
+    "🌐 Internet & Réseau", "📝 Productivité", "🚀 Launchers & Plateformes",
+    "🔧 Système & Drivers", "📦 Autres",
+]
+
+# Aliases pour résoudre le nom de catégorie depuis le langage naturel
+_CAT_ALIASES: dict[str, str] = {
+    "jeux": "🎮 Jeux", "game": "🎮 Jeux", "gaming": "🎮 Jeux", "jeu": "🎮 Jeux",
+    "dev": "💻 Développement", "développement": "💻 Développement",
+    "development": "💻 Développement", "code": "💻 Développement",
+    "programmation": "💻 Développement", "outils": "💻 Développement",
+    "créatif": "🎨 Créatif & Médias", "creative": "🎨 Créatif & Médias",
+    "média": "🎨 Créatif & Médias", "media": "🎨 Créatif & Médias",
+    "photo": "🎨 Créatif & Médias", "vidéo": "🎨 Créatif & Médias",
+    "internet": "🌐 Internet & Réseau", "réseau": "🌐 Internet & Réseau",
+    "network": "🌐 Internet & Réseau", "web": "🌐 Internet & Réseau",
+    "productivité": "📝 Productivité", "productivity": "📝 Productivité",
+    "bureau": "📝 Productivité", "office": "📝 Productivité",
+    "launcher": "🚀 Launchers & Plateformes", "plateforme": "🚀 Launchers & Plateformes",
+    "platform": "🚀 Launchers & Plateformes",
+    "système": "🔧 Système & Drivers", "system": "🔧 Système & Drivers",
+    "driver": "🔧 Système & Drivers", "drivers": "🔧 Système & Drivers",
+    "autre": "📦 Autres", "autres": "📦 Autres", "other": "📦 Autres",
+}
+
+
+def _resolve_category(text: str) -> str | None:
+    """Résout un nom de catégorie depuis du texte libre (ex: 'les jeux', 'dev')."""
+    t = text.lower().strip()
+    for alias, cat in _CAT_ALIASES.items():
+        if alias in t:
+            return cat
+    for cat in _CAT_ORDER:
+        label = cat.split(" ", 1)[1].lower()
+        if label in t:
+            return cat
+    return None
+
+
+def _classify_app(name: str, publisher: str) -> str:
+    n = name.lower()
+    p = (publisher or "").lower()
+    # 1. Catégories apprises (config PC)
+    for cat, kws in _load_custom().items():
+        if any(kw.lower() in n for kw in kws):
+            return cat
+    # 2. Règles built-in (publisher + nom)
+    for emoji, label, name_kws, pub_kws in _APP_CATS:
+        if any(kw in n for kw in name_kws):
+            return f"{emoji} {label}"
+        if any(pk in p for pk in pub_kws):
+            return f"{emoji} {label}"
+    # 3. Systèmes & drivers
+    sys_pub = {"microsoft corporation", "intel corporation", "hp inc.", "logitech",
+               "nvidia corporation", "advanced micro devices"}
+    sys_name = ["nvidia ", "microsoft visual c++", "microsoft .net", "microsoft windows desktop",
+                "java auto updater", "openal", "adobe refresh manager", "adobe creative cloud",
+                "hp audio", "hp connection", "hp documentation", "logitech g hub",
+                "microsoft gameinput", "microsoft update health", "microsoft edge webview2",
+                "amd ryzen master", "nvcpl", "intel(r) c++"]
+    if any(sp in n for sp in sys_name) or any(sp in p for sp in sys_pub):
+        return "🔧 Système & Drivers"
+    return "📦 Autres"
+
+
+def _short_ver(ver: str) -> str:
+    """Garde uniquement major.minor si la version est longue."""
+    if not ver:
+        return ""
+    parts = ver.split(".")
+    if len(parts) <= 2:
+        return ver
+    if all(p.isdigit() for p in parts):
+        return f"{parts[0]}.{parts[1]}"
+    return parts[0]
+
+
+def _ver_tag(name: str, ver: str) -> str:
+    """Retourne ` `major.minor`` ou vide si la version est redondante avec le nom."""
+    sv = _short_ver(ver)
+    if not sv:
+        return ""
+    major = sv.split(".")[0]
+    # Build number interne (ex: JetBrains 252.xxxxx) quand le nom contient déjà l'année
+    if major.isdigit() and int(major) > 100 and _re.search(r"\b20\d{2}\b", name):
+        return ""
+    # Version déjà présente dans le nom (ex: "Node.js 24.15.0")
+    if sv in name.lower() or major in name.lower().split():
+        return ""
+    return f" `{sv}`"
+
+
+def _format_app_list(apps: list, filter_str: str = "") -> str:
+    if not apps:
+        suffix = f" pour '{filter_str}'" if filter_str else ""
+        return f"❌ Aucune application trouvée{suffix}."
+
+    # Catégoriser
+    buckets: dict[str, list] = {c: [] for c in _CAT_ORDER}
+    for a in apps:
+        cat = _classify_app(a.get("name", ""), a.get("publisher", ""))
+        buckets.setdefault(cat, []).append(a)
+
+    header = f"📋 **{len(apps)} applications installées**"
+    if filter_str:
+        header += f"  _(filtre : « {filter_str} »)_"
+    lines = [header, ""]
+
+    for cat in _CAT_ORDER:
+        cat_apps = buckets.get(cat, [])
+        if not cat_apps:
+            continue
+
+        # Séparer les condensables des réguliers
+        collapsed: dict[str, list] = {}
+        regular: list = []
+        for a in cat_apps:
+            n = a.get("name", "")
+            matched_collapse = None
+            for lbl, pat in _COLLAPSE:
+                if pat.search(n):
+                    matched_collapse = lbl
+                    break
+            if matched_collapse:
+                collapsed.setdefault(matched_collapse, []).append(a)
+            else:
+                regular.append(a)
+
+        lines.append(f"**{cat}**  ({len(cat_apps)})")
+
+        # Apps normales
+        for a in regular:
+            name = a.get("name", "")
+            suffix = _ver_tag(name, a.get("version") or "")
+            lines.append(f"  • {name}{suffix}")
+
+        # Groupes condensés
+        for lbl, grp in collapsed.items():
+            if len(grp) == 1:
+                a = grp[0]
+                name = a.get("name", "")
+                suffix = _ver_tag(name, a.get("version") or "")
+                lines.append(f"  • {name}{suffix}")
+            else:
+                vers = sorted({_short_ver(a.get("version") or "") for a in grp if a.get("version")})
+                ver_hint = f" — versions : {', '.join(vers[:3])}" if vers else ""
+                lines.append(f"  ▸ {lbl} _({len(grp)} entrées{ver_hint})_")
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 # ── Installed Apps ────────────────────────────────────────────────────────────
 
 class InstalledAppsSkill(BaseSkill):
     name = "installed_apps"
     description = (
-        "Liste les logiciels installés sur Windows (depuis le registre). "
+        "Gère les logiciels installés sur Windows (registre Win32 + Microsoft Store). "
+        "Actions : list (lister), add_to_category (apprendre une classification), "
+        "remove_from_category (oublier), list_categories (voir les règles apprises). "
         "Utilise pour : 'logiciels installés', 'est-ce que X est installé', "
-        "'version de Y', 'liste des programmes', 'applications sur le PC'."
+        "'ajoute X dans les jeux', 'il manque X', 'X est mal classé'."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "add_to_category", "remove_from_category", "list_categories"],
+                "description": "Action : list (défaut), add_to_category, remove_from_category, list_categories",
+                "default": "list",
+            },
             "filter": {
                 "type": "string",
-                "description": "Filtrer par nom (ex: python, nvidia, office). Vide = tout.",
+                "description": "Filtrer par nom (ex: python, spotify). Vide = tout.",
                 "default": "",
             },
             "limit": {
                 "type": "integer",
-                "description": "Nombre max de résultats (default: 40)",
-                "default": 40,
+                "description": "Nombre max de résultats pour 'list' (default: 200).",
+                "default": 200,
+            },
+            "include_store": {
+                "type": "boolean",
+                "description": "Inclure les apps Microsoft Store (default: true)",
+                "default": True,
+            },
+            "app": {
+                "type": "string",
+                "description": "Nom exact (ou fragment) de l'app pour add/remove_to_category.",
+                "default": "",
+            },
+            "category": {
+                "type": "string",
+                "description": "Catégorie cible. Ex: 'jeux', 'dev', 'créatif', '🎮 Jeux'.",
+                "default": "",
             },
         },
         "required": [],
     }
 
-    async def run(self, filter: str = "", limit: int = 40, **kwargs) -> SkillResult:
+    async def run(
+        self,
+        action: str = "list",
+        filter: str = "",
+        limit: int = 200,
+        include_store: bool = True,
+        app: str = "",
+        category: str = "",
+        **kwargs,
+    ) -> SkillResult:
+
+        # ── add_to_category ───────────────────────────────────────────────────
+        if action == "add_to_category":
+            target = app or filter
+            if not target:
+                return SkillResult(success=False, output="", error="Paramètre 'app' requis.")
+            cat = _resolve_category(category) if category else None
+            if not cat:
+                opts = ", ".join(f"'{c}'" for c in _CAT_ORDER)
+                return SkillResult(success=False, output="",
+                                   error=f"Catégorie non reconnue. Options : {opts}")
+            kw = target.lower().strip()
+            custom = _load_custom()
+            if kw not in custom.get(cat, []):
+                custom.setdefault(cat, []).append(kw)
+                _save_custom(custom)
+            return SkillResult(
+                success=True,
+                output=(
+                    f"✅ **{target}** sera désormais classé dans **{cat}**.\n"
+                    f"Cette règle est sauvegardée sur ce PC ({_CATS_CONFIG})."
+                ),
+            )
+
+        # ── remove_from_category ─────────────────────────────────────────────
+        if action == "remove_from_category":
+            target = (app or filter).lower().strip()
+            if not target:
+                return SkillResult(success=False, output="", error="Paramètre 'app' requis.")
+            custom = _load_custom()
+            removed = []
+            for cat_name, kws in custom.items():
+                if target in kws:
+                    kws.remove(target)
+                    removed.append(cat_name)
+            if removed:
+                _save_custom(custom)
+                return SkillResult(success=True, output=f"✅ Règle « {target} » supprimée de : {', '.join(removed)}.")
+            return SkillResult(success=True, output=f"Aucune règle personnalisée trouvée pour « {target} ».")
+
+        # ── list_categories ───────────────────────────────────────────────────
+        if action == "list_categories":
+            custom = _load_custom()
+            if not custom:
+                return SkillResult(success=True, output="Aucune règle personnalisée. Classification auto uniquement.")
+            lines = [f"**Règles apprises sur ce PC** ({_CATS_CONFIG}) :"]
+            for cat_name, kws in custom.items():
+                if kws:
+                    lines.append(f"  **{cat_name}** : {', '.join(kws)}")
+            return SkillResult(success=True, output="\n".join(lines))
+
+        # ── list (default) ───────────────────────────────────────────────────
+        import json
+
+        # When filtering, scan everything to find all matches
+        reg_limit = 2000 if filter else max(limit, 1)
         filter_clause = f"| Where-Object {{ $_.DisplayName -like '*{filter}*' }}" if filter else ""
-        script = f"""
+
+        reg_script = f"""
 $paths = @(
     'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
@@ -524,35 +878,78 @@ $paths = @(
 Get-ItemProperty $paths -ErrorAction SilentlyContinue |
   Where-Object {{ $_.DisplayName -and $_.DisplayName -ne '' }} {filter_clause} |
   Sort-Object DisplayName |
-  Select-Object -First {limit} |
+  Select-Object -First {reg_limit} |
   ForEach-Object {{
     [ordered]@{{
-      name    = $_.DisplayName
-      version = $_.DisplayVersion
+      name      = $_.DisplayName
+      version   = $_.DisplayVersion
       publisher = $_.Publisher
-      date    = $_.InstallDate
+      source    = 'win32'
     }}
   }} | ConvertTo-Json -Depth 2
 """
-        ok, raw = _ps(script, timeout=20)
-        if not ok:
+        ok, raw = _ps(reg_script, timeout=30)
+        reg_apps: list = []
+        if ok and raw:
+            try:
+                parsed = json.loads(raw)
+                reg_apps = parsed if isinstance(parsed, list) else ([parsed] if parsed else [])
+            except Exception:
+                pass
+        elif not ok:
             return SkillResult(success=False, output="", error=raw)
 
-        import json
-        try:
-            apps = json.loads(raw)
-            if isinstance(apps, dict):
-                apps = [apps]
-        except Exception:
-            return SkillResult(success=True, output=raw)
+        store_apps: list = []
+        if include_store:
+            filter_store = f"| Where-Object {{ $_.Name -like '*{filter}*' }}" if filter else ""
+            store_script = f"""
+Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.IsFramework -eq $false -and $_.SignatureKind -in @('Store','Developer','None') }} {filter_store} |
+  Sort-Object Name |
+  ForEach-Object {{
+    [ordered]@{{
+      name      = ($_.Name -replace '^[A-Za-z0-9]+\\.', '')
+      version   = $_.Version
+      publisher = $_.PublisherDisplayName
+      source    = 'store'
+    }}
+  }} | ConvertTo-Json -Depth 2
+"""
+            ok2, raw2 = _ps(store_script, timeout=20)
+            if ok2 and raw2:
+                try:
+                    parsed2 = json.loads(raw2)
+                    store_apps = parsed2 if isinstance(parsed2, list) else ([parsed2] if parsed2 else [])
+                except Exception:
+                    pass
 
-        title = f"Applications installées ({len(apps)}" + (f", filtrées sur '{filter}'" if filter else "") + ") :"
-        rows = [
-            f"  • {a.get('name', '')} {a.get('version') or ''}"
-            + (f" — {a.get('publisher')}" if a.get('publisher') else "")
-            for a in apps
-        ]
-        return SkillResult(success=True, output="\n".join([title] + rows), data={"apps": apps})
+        # Merge — deduplicate by lowercase name
+        seen: set = set()
+        all_apps: list = []
+        for a in reg_apps:
+            n = (a.get("name") or "").strip().lower()
+            if n and n not in seen:
+                seen.add(n)
+                all_apps.append(a)
+        for a in store_apps:
+            n = (a.get("name") or "").strip().lower()
+            if n and n not in seen:
+                seen.add(n)
+                all_apps.append(a)
+
+        if not filter and limit > 0:
+            all_apps = all_apps[:limit]
+
+        if not all_apps:
+            msg = (
+                f"❌ Aucune application correspondant à '{filter}' trouvée."
+                if filter
+                else "Aucune application trouvée."
+            )
+            return SkillResult(success=True, output=msg, data={"apps": []})
+
+        output = _format_app_list(all_apps, filter_str=filter)
+        return SkillResult(success=True, output=output, data={"apps": all_apps})
 
 
 # ── Windows Settings ──────────────────────────────────────────────────────────

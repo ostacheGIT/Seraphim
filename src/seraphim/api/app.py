@@ -672,13 +672,21 @@ async def chat_stream(req: ChatRequest):
             img_ctx = _AC()
             img_ctx.add_system(chat_ag.system_prompt)
             img_ctx.add_user(effective_query)
-            result = await chat_ag._chat(img_ctx.messages)
+            try:
+                result = await chat_ag._chat(img_ctx.messages)
+            except Exception as exc:
+                result = f"⚠️ Erreur LLM : {exc}"
             yield result
         else:
             chunks: list[str] = []
-            async for chunk in ag.stream(effective_query, ctx):
-                chunks.append(chunk)
-                yield chunk
+            try:
+                async for chunk in ag.stream(effective_query, ctx):
+                    chunks.append(chunk)
+                    yield chunk
+            except Exception as exc:
+                error_chunk = f"\n⚠️ Erreur moteur LLM : {exc}"
+                chunks.append(error_chunk)
+                yield error_chunk
             result = "".join(chunks)
 
         await save_message(session_id, "user", req.query, routed_agent)

@@ -193,7 +193,17 @@ class OllamaEngine:
         first_token_ns: int | None = None
 
         async with self._client.stream("POST", "/api/chat", json=payload) as response:
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = await response.aread()
+                try:
+                    detail = json.loads(body).get("error", body.decode("utf-8", errors="replace"))
+                except Exception:
+                    detail = body.decode("utf-8", errors="replace")
+                raise httpx.HTTPStatusError(
+                    f"Ollama {response.status_code}: {detail[:300]}",
+                    request=response.request,
+                    response=response,
+                )
             async for line in response.aiter_lines():
                 if not line:
                     continue
