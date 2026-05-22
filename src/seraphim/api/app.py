@@ -32,6 +32,13 @@ from seraphim.memory.store import (
     save_message,
     save_session_title,
 )
+from seraphim.memory.user_facts import (
+    get_all_facts,
+    save_fact,
+    delete_fact,
+    search_facts,
+    format_facts_for_prompt,
+)
 from seraphim.learning.trace_store import (
     save_trace,
     Trace as LearningTrace,
@@ -42,8 +49,8 @@ from seraphim.voice.speaker import synthesize_to_bytes, speak_async
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    from seraphim.memory import init_rag
-    init_rag()
+    from seraphim.memory import create_backend, set_rag_backend
+    set_rag_backend(create_backend("sqlite_fts"))
     _maybe_start_daemon()
     yield
 
@@ -600,6 +607,32 @@ def _build_agent(agent_name: str, engine_id: str):
     return ag
 
 
+async def _enrich_agent_context(ag, query: str) -> None:
+    """Inject user facts and RAG context into agent system prompt (mutates ag.system_prompt)."""
+    parts: list[str] = []
+
+    # User facts
+    facts = await get_all_facts()
+    facts_text = format_facts_for_prompt(facts)
+    if facts_text:
+        parts.append(facts_text)
+
+    # RAG context
+    from seraphim.memory import get_rag_backend
+    from seraphim.memory.context import format_context
+    rag_backend = get_rag_backend()
+    if rag_backend:
+        try:
+            results = rag_backend.retrieve(query, top_k=5)
+            if results:
+                parts.append("Documents pertinents de la base de connaissances:\n\n" + format_context(results))
+        except Exception as exc:
+            logger.debug("RAG retrieval failed: %s", exc)
+
+    if parts:
+        ag.system_prompt = ag.system_prompt + "\n\n" + "\n\n".join(parts)
+
+
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
 async def chat(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
@@ -677,6 +710,7 @@ async def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     effective_query, vision_unavailable = await _augment_query_with_image(req.query, req.image)
+    await _enrich_agent_context(ag, req.query)
     trace_id = str(uuid.uuid4())
 
     async def generator():
@@ -824,6 +858,69 @@ async def generate_session_title(session_id: str):
 
     await save_session_title(session_id, title)
     return {"title": title}
+
+
+# ─── User Facts ──────────────────────────────────────────────────────────────
+
+@app.get("/memory/facts")
+async def get_user_facts():
+    facts = await get_all_facts()
+    return {"facts": facts}
+
+
+class FactRequest(BaseModel):
+    key: str
+    value: str
+
+
+@app.post("/memory/facts")
+async def set_user_fact(req: FactRequest):
+    await save_fact(req.key, req.value)
+    return {"ok": True, "key": req.key}
+
+
+@app.delete("/memory/facts/{key}")
+async def remove_user_fact(key: str):
+    deleted = await delete_fact(key)
+    return {"ok": deleted, "key": key}
+
+
+# ─── RAG ─────────────────────────────────────────────────────────────────────
+
+class RAGIngestRequest(BaseModel):
+    content: str
+    source: str = "manual"
+
+
+@app.post("/rag/ingest")
+async def rag_ingest(req: RAGIngestRequest):
+    from seraphim.memory import get_rag_backend, ingest_text
+    backend = get_rag_backend()
+    if backend is None:
+        raise HTTPException(status_code=503, detail="RAG backend not initialized")
+    loop = asyncio.get_running_loop()
+    ids = await loop.run_in_executor(
+        None, lambda: ingest_text(req.content, backend, source=req.source)
+    )
+    return {"ingested_chunks": len(ids)}
+
+
+@app.get("/rag/status")
+async def rag_status():
+    from seraphim.memory import get_rag_backend
+    backend = get_rag_backend()
+    count = backend.count() if backend is not None else 0
+    return {"enabled": backend is not None, "doc_count": count}
+
+
+@app.delete("/rag/reset")
+async def rag_reset():
+    from seraphim.memory import get_rag_backend
+    backend = get_rag_backend()
+    if backend is None:
+        raise HTTPException(status_code=503, detail="RAG backend not initialized")
+    backend.clear()
+    return {"ok": True}
 
 
 # ─── TTS / Voice ─────────────────────────────────────────────────────────────

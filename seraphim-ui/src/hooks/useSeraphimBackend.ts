@@ -165,3 +165,62 @@ export async function generateSessionTitle(sessionId: string): Promise<string | 
     return data.title || null;
   } catch { return null; }
 }
+
+// ── User Facts ────────────────────────────────────────────────────────────────
+
+export async function getUserFacts(): Promise<Record<string, string>> {
+  try {
+    const res = await fetch(`${BASE}/memory/facts`);
+    if (!res.ok) return {};
+    const data = await res.json() as { facts: Record<string, string> };
+    return data.facts ?? {};
+  } catch { return {}; }
+}
+
+export async function setUserFact(key: string, value: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/memory/facts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function deleteUserFact(key: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/memory/facts/${encodeURIComponent(key)}`, { method: "DELETE" });
+    return res.ok;
+  } catch { return false; }
+}
+
+// ── RAG ───────────────────────────────────────────────────────────────────────
+
+export async function getRagStatus(): Promise<{ enabled: boolean; doc_count: number }> {
+  try {
+    const res = await fetch(`${BASE}/rag/status`);
+    if (!res.ok) return { enabled: false, doc_count: 0 };
+    return res.json();
+  } catch { return { enabled: false, doc_count: 0 }; }
+}
+
+export async function ingestToRAG(content: string, source: string = "manual"): Promise<number> {
+  try {
+    const res = await fetch(`${BASE}/rag/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, source }),
+    });
+    if (!res.ok) return 0;
+    const data = await res.json() as { ingested_chunks: number };
+    return data.ingested_chunks ?? 0;
+  } catch { return 0; }
+}
+
+export async function resetRAG(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/rag/reset`, { method: "DELETE" });
+    return res.ok;
+  } catch { return false; }
+}

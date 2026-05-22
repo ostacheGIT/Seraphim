@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -112,6 +112,8 @@ export default function OrbScreen({
     const [catalogResizing, setCatalogResizing] = useState(false);
     const [view, setView]                 = useState<"list" | "chat">("list");
     const [installedSkillAgents, setInstalledSkillAgents] = useState<{ id: string; label: string }[]>([]);
+    const [ragCount, setRagCount]         = useState(0);
+    const [ragIngesting, setRagIngesting] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
 
     const refreshInstalledSkills = () => {
@@ -124,7 +126,14 @@ export default function OrbScreen({
         });
     };
 
-    useEffect(() => { refreshInstalledSkills(); }, []);
+    const refreshRagStatus = () => {
+        getRagStatus().then((s) => setRagCount(s.doc_count));
+    };
+
+    useEffect(() => {
+        refreshInstalledSkills();
+        refreshRagStatus();
+    }, []);
 
     const agents = [...BASE_AGENTS, ...installedSkillAgents];
 
@@ -300,6 +309,24 @@ export default function OrbScreen({
                     </div>
                 </div>
 
+                {/* Base de connaissances (RAG) */}
+                <div className="rag-status-bar">
+                    <span className="rag-doc-count">
+                        KB · {ragCount} fragment{ragCount !== 1 ? "s" : ""}
+                    </span>
+                    <button
+                        className="rag-reset-btn"
+                        title="Vider la base de connaissances"
+                        onClick={async () => {
+                            if (!window.confirm("Vider toute la base de connaissances ?")) return;
+                            await resetRAG();
+                            refreshRagStatus();
+                        }}
+                    >
+                        Vider
+                    </button>
+                </div>
+
                 {/* Vue liste */}
                 {view === "list" && (
                     <div className="conversation-list">
@@ -372,6 +399,20 @@ export default function OrbScreen({
                                         <div className="file-preview-wrap">
                                             <Paperclip size={11} />
                                             <span className="file-preview-name">{pendingFile.name}</span>
+                                            <button
+                                                className="file-kb-btn"
+                                                title="Mémoriser dans la base de connaissances"
+                                                disabled={ragIngesting}
+                                                onClick={async () => {
+                                                    if (!pendingFile) return;
+                                                    setRagIngesting(true);
+                                                    await ingestToRAG(pendingFile.content, pendingFile.name);
+                                                    setRagIngesting(false);
+                                                    refreshRagStatus();
+                                                }}
+                                            >
+                                                {ragIngesting ? "…" : "KB"}
+                                            </button>
                                             <button
                                                 className="file-preview-remove"
                                                 onClick={() => onFileChange?.(null)}

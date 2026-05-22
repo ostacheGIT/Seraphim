@@ -1617,6 +1617,94 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
     color: #ffffff;
 }
 
+/* ─── RAG status bar ────────────────────────────────────────── */
+.rag-status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 1rem 0.5rem;
+    padding: 0.3rem 0.7rem;
+    background: var(--stripe);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    gap: 0.5rem;
+}
+
+.rag-doc-count {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+    font-family: 'Share Tech Mono', monospace;
+}
+
+.rag-reset-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 9px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: background 0.15s, color 0.15s;
+}
+
+.rag-reset-btn:hover {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+/* KB button on file preview */
+.file-kb-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: rgba(220, 220, 220, 0.8);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: background 0.15s, color 0.15s;
+}
+
+.file-kb-btn:hover:not(:disabled) {
+    background: rgba(100, 180, 255, 0.18);
+    color: rgba(160, 210, 255, 0.95);
+    border-color: rgba(100, 180, 255, 0.4);
+}
+
+.file-kb-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+[data-theme="light"] .rag-status-bar {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(20, 20, 40, 0.1);
+}
+
+[data-theme="light"] .rag-doc-count {
+    color: rgba(20, 20, 40, 0.5);
+}
+
+[data-theme="light"] .rag-reset-btn {
+    border-color: rgba(20, 20, 40, 0.15);
+    color: rgba(20, 20, 40, 0.45);
+}
+
+[data-theme="light"] .file-kb-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(20, 20, 40, 0.2);
+    color: rgba(20, 20, 40, 0.6);
+}
+
+[data-theme="light"] .file-kb-btn:hover:not(:disabled) {
+    background: rgba(30, 100, 200, 0.1);
+    color: rgba(30, 100, 200, 0.85);
+    border-color: rgba(30, 100, 200, 0.3);
+}
+
 /* ─── Responsive ────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .orb-stage.shifted {
