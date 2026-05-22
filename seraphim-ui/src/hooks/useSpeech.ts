@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-// ─── Types Web Speech API ─────────────────────────────────────────────────────
+// ─── Web Speech API types ─────────────────────────────────────────────────────
 
 interface ISpeechRecognition extends EventTarget {
     lang: string;
@@ -16,23 +16,29 @@ interface ISpeechRecognition extends EventTarget {
     onerror: ((ev: ISpeechRecognitionErrorEvent) => void) | null;
 }
 interface ISpeechRecognitionEvent extends Event {
-    results: { [i: number]: { [i: number]: { transcript: string; confidence: number } } };
+    results: { [i: number]: { [i: number]: { transcript: string; confidence: number } }; length: number };
+    resultIndex: number;
 }
-interface ISpeechRecognitionErrorEvent extends Event {
-    error: string;
-}
+interface ISpeechRecognitionErrorEvent extends Event { error: string; }
 interface ISpeechRecognitionConstructor { new(): ISpeechRecognition; }
 
 function getSR(): ISpeechRecognitionConstructor | null {
     if (typeof window === "undefined") return null;
-    return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+    return (window as unknown as Record<string, ISpeechRecognitionConstructor>).SpeechRecognition
+        || (window as unknown as Record<string, ISpeechRecognitionConstructor>).webkitSpeechRecognition
+        || null;
 }
 
-// ─── Config backend ───────────────────────────────────────────────────────────
+// ─── Config ───────────────────────────────────────────────────────────────────
 
 const SERAPHIM_API = "http://localhost:7272";
+const WAKE_WORDS   = [
+    "seraphim", "séraphim", "séraphin", "séraphine",
+    "serafim",  "serafin",  "seraphin", "sérafin",
+    "seraph",   "sera fim", "sara",
+];
 
-// ─── Hook principal ───────────────────────────────────────────────────────────
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 interface UseSpeechOptions {
     lang?: string;
@@ -42,55 +48,169 @@ interface UseSpeechOptions {
 
 export type SpeechState = "idle" | "listening" | "speaking" | "error";
 
-export function useSpeech({
-                              lang = "fr-FR",
-                              onTranscript,
-                              onError,
-                          }: UseSpeechOptions) {
-    const [state, setState]   = useState<SpeechState>("idle");
-    const [voiceError, setVoiceError] = useState<string | null>(null);
-    const recogRef            = useRef<ISpeechRecognition | null>(null);
-    const audioCtxRef         = useRef<AudioContext | null>(null);
-    const sourceRef           = useRef<AudioBufferSourceNode | null>(null);
-    const queueRef            = useRef<string[]>([]);
-    const isPlayingRef        = useRef<boolean>(false);
-    const abortRef            = useRef<AbortController | null>(null);
+export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOptions) {
+    const [state,            setState]            = useState<SpeechState>("idle");
+    const [voiceError,       setVoiceError]       = useState<string | null>(null);
+    const [isWakeWordActive, setIsWakeWordActive] = useState(false);
 
-    // Always-fresh refs — avoids stale-closure bugs when activeId changes right
-    // before startListening() is called (e.g. orb click with no open conversation).
     const onTranscriptRef = useRef(onTranscript);
     const onErrorRef      = useRef(onError);
     useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
     useEffect(() => { onErrorRef.current      = onError;      }, [onError]);
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // TTS refs
+    const audioCtxRef  = useRef<AudioContext | null>(null);
+    const sourceRef    = useRef<AudioBufferSourceNode | null>(null);
+    const abortTTSRef  = useRef<AbortController | null>(null);
+    const queueRef     = useRef<string[]>([]);
+    const isPlayingRef = useRef(false);
+
+    // STT refs
+    const recogRef          = useRef<ISpeechRecognition | null>(null);
+    const wakeWordRecogRef  = useRef<ISpeechRecognition | null>(null);
+    const wakeWordActiveRef = useRef(false);
+
+    // Stable ref to break circular dep: wakeWordLoop needs startListening, startListening needs wakeWordLoop
+    const startListeningRef  = useRef<() => void>(() => {});
+    const wakeWordLoopRef    = useRef<() => void>(() => {});
+
+    // ── TTS ───────────────────────────────────────────────────────────────────
 
     const getAudioCtx = useCallback(async (): Promise<AudioContext> => {
         if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
             audioCtxRef.current = new AudioContext();
         }
-        if (audioCtxRef.current.state === "suspended") {
-            await audioCtxRef.current.resume();
-        }
+        if (audioCtxRef.current.state === "suspended") await audioCtxRef.current.resume();
         return audioCtxRef.current;
     }, []);
 
     const stopCurrentAudio = useCallback(() => {
-        abortRef.current?.abort();
-        abortRef.current = null;
+        abortTTSRef.current?.abort();
+        abortTTSRef.current = null;
         try { sourceRef.current?.stop(); } catch (_) {}
         sourceRef.current = null;
     }, []);
 
-    // ── STT ───────────────────────────────────────────────────────────────────
+    const playNext = useCallback(async () => {
+        if (isPlayingRef.current || queueRef.current.length === 0) return;
+        isPlayingRef.current = true;
+        setState("speaking");
+        const sentence = queueRef.current.shift()!;
+        const abort    = new AbortController();
+        abortTTSRef.current = abort;
+        try {
+            const res = await fetch(`${SERAPHIM_API}/tts/audio`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: sentence }), signal: abort.signal,
+            });
+            if (!res.ok) throw new Error(`TTS ${res.status}`);
+            const ab = await res.arrayBuffer();
+            if (abort.signal.aborted) return;
+            const ctx  = await getAudioCtx();
+            const buf  = await ctx.decodeAudioData(ab);
+            const src  = ctx.createBufferSource();
+            sourceRef.current = src;
+            src.buffer = buf; src.connect(ctx.destination);
+            src.onended = () => {
+                sourceRef.current = null; isPlayingRef.current = false; abortTTSRef.current = null;
+                if (queueRef.current.length > 0) void playNext(); else setState("idle");
+            };
+            src.start(0);
+        } catch (err) {
+            if ((err as Error).name === "AbortError") return;
+            sourceRef.current = null; isPlayingRef.current = false; abortTTSRef.current = null;
+            if (queueRef.current.length > 0) void playNext(); else setState("idle");
+            onError?.(`TTS indisponible : ${(err as Error).message}`);
+        }
+    }, [onError, getAudioCtx]);
+
+    const speak = useCallback((text: string): Promise<void> => new Promise((resolve) => {
+        const clean = text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1")
+            .replace(/`(.+?)`/g, "$1").replace(/#{1,6}\s/g, "").trim();
+        if (!clean) { resolve(); return; }
+        queueRef.current.push(clean);
+        void playNext();
+        resolve();
+    }), [playNext]);
+
+    const stopSpeaking = useCallback(() => {
+        queueRef.current = []; isPlayingRef.current = false;
+        stopCurrentAudio(); setState("idle");
+    }, [stopCurrentAudio]);
+
+    // ── Wake word — short looping sessions (non-continuous to avoid conflicts) ─
+
+    // Each session listens for a single utterance.
+    // If it contains a wake word → trigger main STT.
+    // Otherwise → immediately restart another session.
+    // This way there is NEVER an abort() call; sessions end naturally → no conflict.
+    const wakeWordLoop = useCallback(() => {
+        if (!wakeWordActiveRef.current) return;
+        const SR = getSR();
+        if (!SR) return;
+
+        const recog = new SR();
+        recog.lang            = lang; // same language as main STT
+        recog.continuous      = false;
+        recog.interimResults  = true;  // fire on partial results — catch word mid-utterance
+        recog.maxAlternatives = 1;
+
+        let detected = false;
+
+        recog.onresult = (e: ISpeechRecognitionEvent) => {
+            if (detected) return;
+            for (let ri = e.resultIndex; ri < e.results.length; ri++) {
+                const text = e.results[ri][0].transcript.toLowerCase();
+                if (WAKE_WORDS.some(w => text.includes(w))) {
+                    detected = true;
+                    recog.stop(); // stop cleanly so onend fires normally
+                    break;
+                }
+            }
+        };
+
+        // onend always fires (after result, error, or timeout)
+        recog.onend = () => {
+            wakeWordRecogRef.current = null;
+            if (detected) {
+                // Let the browser release the mic, then start main STT
+                setTimeout(() => startListeningRef.current(), 200);
+            } else if (wakeWordActiveRef.current) {
+                // No wake word heard, loop immediately
+                wakeWordLoopRef.current();
+            }
+        };
+
+        // onerror still fires before onend; just let onend handle the restart
+        recog.onerror = () => { /* onend will fire next */ };
+
+        try {
+            recog.start();
+            wakeWordRecogRef.current = recog;
+        } catch (_) {
+            // start() failed (e.g. mic in use), retry after a second
+            if (wakeWordActiveRef.current) setTimeout(() => wakeWordLoopRef.current(), 1000);
+        }
+    }, [lang]);
+
+    // Keep refs current
+    useEffect(() => { wakeWordLoopRef.current = wakeWordLoop; }, [wakeWordLoop]);
+
+    // ── STT (Web Speech API) ──────────────────────────────────────────────────
 
     const startListening = useCallback(() => {
-        queueRef.current     = [];
-        isPlayingRef.current = false;
-        stopCurrentAudio();
-        setVoiceError(null);
+        // Stop any in-progress wake word session without abort() —
+        // null out onend so it won't restart itself after we kill it.
+        if (wakeWordRecogRef.current) {
+            const wr = wakeWordRecogRef.current;
+            wakeWordRecogRef.current = null;
+            wr.onend = null; wr.onerror = null; wr.onresult = null;
+            try { wr.abort(); } catch (_) {}
+        }
 
-        // Stop any previous recognition session before starting a new one
+        queueRef.current = []; isPlayingRef.current = false;
+        stopCurrentAudio(); setVoiceError(null);
+
         if (recogRef.current) {
             try { recogRef.current.abort(); } catch (_) {}
             recogRef.current = null;
@@ -99,155 +219,90 @@ export function useSpeech({
         const SR = getSR();
         if (!SR) {
             const msg = "SpeechRecognition non supporté. Utilise Chrome ou Edge.";
-            setVoiceError(msg);
-            onError?.(msg);
-            return;
+            setVoiceError(msg); onError?.(msg); return;
         }
 
         const recog = new SR();
-        recog.lang            = lang;
-        recog.interimResults  = false;
-        recog.maxAlternatives = 1;
-        recog.continuous      = false;
+        recog.lang = lang; recog.interimResults = false; recog.maxAlternatives = 1; recog.continuous = false;
 
         recog.onstart  = () => { setVoiceError(null); setState("listening"); };
         recog.onresult = (e: ISpeechRecognitionEvent) => {
-            const transcript = e.results[0][0].transcript.trim();
-            if (transcript) onTranscriptRef.current(transcript);
+            const t = e.results[0][0].transcript.trim();
+            if (t) onTranscriptRef.current(t);
         };
-        recog.onerror  = (e: ISpeechRecognitionErrorEvent) => {
+        recog.onerror = (e: ISpeechRecognitionErrorEvent) => {
             const msg = e.error === "not-allowed"
                 ? "Accès micro refusé — autorise le micro dans les paramètres Windows."
-                : e.error === "no-speech"
-                ? null
-                : e.error;
+                : e.error === "no-speech" ? null : e.error;
             if (msg) { setVoiceError(msg); onErrorRef.current?.(msg); }
             setState("idle");
         };
-        recog.onend    = () => {
+        recog.onend = () => {
             setState((s) => (s === "listening" ? "idle" : s));
+            wakeWordLoopRef.current(); // resume wake word loop after STT ends
         };
 
         recogRef.current = recog;
-        try {
-            recog.start();
-        } catch (err) {
-            const msg = `Impossible de démarrer la reconnaissance : ${(err as Error).message}`;
-            setVoiceError(msg);
-            onError?.(msg);
-            setState("idle");
+        try { recog.start(); } catch (err) {
+            const msg = `Impossible de démarrer : ${(err as Error).message}`;
+            setVoiceError(msg); onError?.(msg); setState("idle");
         }
-    }, [lang, stopCurrentAudio]);
+    }, [lang, stopCurrentAudio, onError]);
 
-    const stopListening   = useCallback(() => { recogRef.current?.stop(); setState("idle"); }, []);
+    useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
+
+    const stopListening = useCallback(() => {
+        recogRef.current?.stop(); setState("idle");
+    }, []);
+
     const toggleListening = useCallback(() => {
         if (state === "listening") stopListening();
         else startListening();
     }, [state, startListening, stopListening]);
 
-    // ── Queue audio ───────────────────────────────────────────────────────────
+    // ── Wake word toggle ──────────────────────────────────────────────────────
 
-    const playNext = useCallback(async () => {
-        if (isPlayingRef.current || queueRef.current.length === 0) return;
-        isPlayingRef.current = true;
-        setState("speaking");
-
-        const sentence = queueRef.current.shift()!;
-        const abort    = new AbortController();
-        abortRef.current = abort;
-
-        try {
-            const response = await fetch(`${SERAPHIM_API}/tts/audio`, {
-                method:  "POST",
-                headers: { "Content-Type": "application/json" },
-                body:    JSON.stringify({ text: sentence }),
-                signal:  abort.signal,
-            });
-
-            if (!response.ok) throw new Error(`TTS error: ${response.status}`);
-
-            const arrayBuffer = await response.arrayBuffer();
-            if (abort.signal.aborted) return;
-
-            const audioCtx    = await getAudioCtx();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            const source      = audioCtx.createBufferSource();
-            sourceRef.current = source;
-            source.buffer     = audioBuffer;
-            source.connect(audioCtx.destination);
-
-            source.onended = () => {
-                sourceRef.current    = null;
-                isPlayingRef.current = false;
-                abortRef.current     = null;
-                if (queueRef.current.length > 0) playNext();
-                else setState("idle");
-            };
-
-            source.start(0);
-
-        } catch (err) {
-            if ((err as Error).name === "AbortError") return;
-            sourceRef.current    = null;
-            isPlayingRef.current = false;
-            abortRef.current     = null;
-            if (queueRef.current.length > 0) playNext();
-            else setState("idle");
-            onError?.(`TTS indisponible : ${(err as Error).message}`);
+    const toggleWakeWord = useCallback(() => {
+        if (wakeWordActiveRef.current) {
+            wakeWordActiveRef.current = false;
+            if (wakeWordRecogRef.current) {
+                const wr = wakeWordRecogRef.current;
+                wakeWordRecogRef.current = null;
+                wr.onend = null; wr.onerror = null; wr.onresult = null;
+                try { wr.abort(); } catch (_) {}
+            }
+            setIsWakeWordActive(false);
+        } else {
+            wakeWordActiveRef.current = true;
+            setIsWakeWordActive(true);
+            wakeWordLoopRef.current();
         }
-    }, [onError, getAudioCtx]);
+    }, []);
 
-    // ── TTS — speak() ajoute à la queue ──────────────────────────────────────
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
-    const speak = useCallback(
-        (text: string): Promise<void> => {
-            return new Promise((resolve) => {
-                const clean = text
-                    .replace(/\*\*(.+?)\*\*/g, "$1")
-                    .replace(/\*(.+?)\*/g,     "$1")
-                    .replace(/`(.+?)`/g,        "$1")
-                    .replace(/#{1,6}\s/g,       "")
-                    .trim();
-
-                if (!clean) { resolve(); return; }
-
-                queueRef.current.push(clean);
-                playNext();
-                resolve();
-            });
-        },
-        [playNext]
-    );
-
-    // ── Stop speaking ─────────────────────────────────────────────────────────
-
-    const stopSpeaking = useCallback(() => {
-        queueRef.current     = [];
-        isPlayingRef.current = false;
-        stopCurrentAudio();
-        setState("idle");
-    }, [stopCurrentAudio]);
-
-    // ── Nettoyage à l'unmount ─────────────────────────────────────────────────
-
-    useEffect(() => {
-        return () => {
-            recogRef.current?.abort();
-            queueRef.current     = [];
-            isPlayingRef.current = false;
-            stopCurrentAudio();
-            audioCtxRef.current?.close();
-        };
+    useEffect(() => () => {
+        wakeWordActiveRef.current = false;
+        if (wakeWordRecogRef.current) {
+            wakeWordRecogRef.current.onend = null;
+            try { wakeWordRecogRef.current.abort(); } catch (_) {}
+        }
+        try { recogRef.current?.abort(); } catch (_) {}
+        queueRef.current = []; isPlayingRef.current = false;
+        stopCurrentAudio(); audioCtxRef.current?.close();
     }, [stopCurrentAudio]);
 
     return {
         state,
-        isListening:     state === "listening",
-        isSpeaking:      state === "speaking",
+        isListening:      state === "listening",
+        isSpeaking:       state === "speaking",
         voiceError,
+        isWakeWordActive,
+        whisperAvailable: null as null,
         toggleListening,
         startListening,
         stopListening,
+        toggleWakeWord,
         speak,
         stopSpeaking,
     };

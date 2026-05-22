@@ -5,15 +5,17 @@ Seraphim API — FastAPI application.
 import json
 import logging
 import os
+import tempfile
 import uuid
 import asyncio
 from contextlib import asynccontextmanager
 from functools import partial
+from pathlib import Path
 from typing import Optional, Literal
 
 logger = logging.getLogger(__name__)
 
-from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi import Depends, FastAPI, File, HTTPException, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security.api_key import APIKeyHeader
@@ -1016,3 +1018,69 @@ async def tts_audio(req: TTSRequest):
         media_type="audio/wav",
         headers={"Content-Disposition": "inline; filename=response.wav"},
     )
+
+
+# ─── STT / Whisper ───────────────────────────────────────────────────────────
+
+_whisper_transcriber = None
+_whisper_lock = asyncio.Lock()
+
+
+async def _get_whisper():
+    """Lazy-load the Whisper transcriber (singleton)."""
+    global _whisper_transcriber
+    if _whisper_transcriber is None:
+        async with _whisper_lock:
+            if _whisper_transcriber is None:
+                from seraphim.voice.transcriber import Transcriber
+                loop = asyncio.get_running_loop()
+                _whisper_transcriber = await loop.run_in_executor(
+                    None, lambda: Transcriber(model_size="base", language=None, device="cpu")
+                )
+    return _whisper_transcriber
+
+
+@app.get("/stt/status")
+async def stt_status():
+    """Vérifie si faster-whisper est disponible."""
+    try:
+        from faster_whisper import WhisperModel  # noqa: F401
+        return {"available": True, "model": "base"}
+    except ImportError:
+        return {"available": False, "model": None}
+
+
+@app.post("/stt/transcribe")
+async def stt_transcribe(audio: UploadFile = File(...)):
+    """Transcrit un fichier audio avec faster-whisper (local, offline).
+
+    Accepte audio/webm, audio/wav, audio/mp3, etc.
+    Retourne {"text": "..."}.
+    """
+    try:
+        t = await _get_whisper()
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="faster-whisper non installé. Lance : uv pip install 'seraphim[voice]'",
+        )
+
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="audio vide")
+
+    suffix = Path(audio.filename or "audio.webm").suffix or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, lambda: t.transcribe_file(tmp_path))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return {"text": text.strip()}

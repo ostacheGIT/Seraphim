@@ -36,7 +36,10 @@ export default function App() {
         isListening,
         isSpeaking,
         voiceError,
+        isWakeWordActive,
+        whisperAvailable,
         toggleListening,
+        toggleWakeWord,
         speak,
         stopSpeaking,
     } = useSpeech({
@@ -252,9 +255,12 @@ export default function App() {
             isThinking={isThinking}
             isSpeaking={isSpeaking}
             voiceError={voiceError}
+            isWakeWordActive={isWakeWordActive}
+            whisperAvailable={whisperAvailable}
             onSend={sendMessage}
             onVoiceToggle={toggleListening}
             onStopSpeaking={stopSpeaking}
+            onWakeWordToggle={toggleWakeWord}
             onStop={stopGeneration}
             onSelectConversation={setActiveId}
             onNewConversation={newConversation}

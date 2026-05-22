@@ -22,9 +22,12 @@ interface OrbScreenProps {
     isThinking: boolean;
     isSpeaking: boolean;
     voiceError?: string | null;
+    isWakeWordActive?: boolean;
+    whisperAvailable?: boolean | null;
     onSend: (text: string) => void;
     onVoiceToggle: () => void;
     onStopSpeaking: () => void;
+    onWakeWordToggle?: () => void;
     onSelectConversation: (id: string) => void;
     onNewConversation: () => void;
     onDeleteConversation: (id: string) => void;
@@ -121,9 +124,12 @@ export default function OrbScreen({
     isThinking,
     isSpeaking,
     voiceError,
+    isWakeWordActive = false,
+    whisperAvailable = null,
     onSend,
     onVoiceToggle,
     onStopSpeaking,
+    onWakeWordToggle,
     onSelectConversation,
     onNewConversation,
     onDeleteConversation,
@@ -252,10 +258,11 @@ export default function OrbScreen({
         : isThinking  ? "thinking"
         : "idle";
 
-    const statusText = voiceError   ? `⚠ ${voiceError}`
-        : isListening ? "● écoute en cours..."
-        : isSpeaking  ? "◈ Seraphim parle..."
-        : isThinking  ? "◌ traitement..."
+    const statusText = voiceError       ? `⚠ ${voiceError}`
+        : isListening       ? "● écoute en cours..."
+        : isSpeaking        ? "◈ Seraphim parle..."
+        : isThinking        ? "◌ traitement..."
+        : isWakeWordActive  ? "◉ en veille — dites « Seraphim »"
         : "cliquez pour parler";
 
     const orbShift = panelOpen && !catalogOpen ? "shifted"
@@ -629,6 +636,16 @@ export default function OrbScreen({
                     >
                         <VolumeX size={14} />
                         <span>couper</span>
+                    </button>
+                )}
+                {onWakeWordToggle && whisperAvailable !== false && (
+                    <button
+                        className={`wake-word-btn${isWakeWordActive ? " active" : ""}`}
+                        onClick={onWakeWordToggle}
+                        aria-label={isWakeWordActive ? "Désactiver le wake word" : "Activer le wake word"}
+                        title={isWakeWordActive ? "Wake word actif — dites « Seraphim »" : "Activer la détection par mot-clé"}
+                    >
+                        {isWakeWordActive ? "◉" : "○"} wake word
                     </button>
                 )}
                 <div className="dot-row">
