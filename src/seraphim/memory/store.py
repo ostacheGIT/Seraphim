@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import aiosqlite
@@ -30,6 +31,15 @@ async def init_db() -> None:
             await db.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
         except Exception:
             logger.debug("Column 'title' already exists, skipping ALTER TABLE")
+        # Sliding summary buffer table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                session    TEXT PRIMARY KEY,
+                summary    TEXT NOT NULL,
+                msg_count  INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT    NOT NULL
+            )
+        """)
         await db.commit()
 
 
@@ -158,3 +168,64 @@ async def truncate_session(session: str, keep_count: int) -> None:
             )
         """, (session, session, keep_count))
         await db.commit()
+
+
+# ── Sliding summary buffer ────────────────────────────────────────────────────
+
+async def get_session_message_count(session: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM conversations WHERE session = ?", (session,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return row[0] if row else 0
+
+
+async def get_session_summary(session: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT summary FROM session_summaries WHERE session = ?", (session,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def save_session_summary(session: str, summary: str, msg_count: int = 0) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO session_summaries (session, summary, msg_count, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            (session, summary, msg_count, datetime.now().isoformat()),
+        )
+        await db.commit()
+
+
+async def load_older_messages_for_summary(session: str, keep_recent: int = 20) -> list[dict]:
+    """Return messages that fall outside the recent keep_recent window (oldest first)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """SELECT role, content FROM conversations
+               WHERE session = ?
+               ORDER BY id ASC
+               LIMIT (SELECT MAX(0, COUNT(*) - ?) FROM conversations WHERE session = ?)""",
+            (session, keep_recent, session),
+        ) as cursor:
+            rows = await cursor.fetchall()
+    return [{"role": r, "content": c} for r, c in rows]
+
+
+async def load_history_with_summary(
+    session: str, keep_recent: int = 20
+) -> tuple[list[dict], str | None]:
+    """
+    Load recent messages + any stored summary of older messages.
+    Returns (recent_messages, summary_text_or_None).
+    """
+    recent, total, summary = await asyncio.gather(
+        load_history(session, limit=keep_recent),
+        get_session_message_count(session),
+        get_session_summary(session),
+    )
+    if total <= keep_recent + 5:
+        return recent, None  # session is short enough — no summary needed
+    return recent, summary

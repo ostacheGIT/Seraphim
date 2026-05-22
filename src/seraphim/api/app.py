@@ -16,7 +16,7 @@ from typing import Optional, Literal
 
 logger = logging.getLogger(__name__)
 
-from fastapi import Depends, FastAPI, File, HTTPException, Security, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security.api_key import APIKeyHeader
@@ -30,12 +30,16 @@ from seraphim.settings import settings
 from seraphim.memory.store import (
     init_db,
     load_history,
+    load_history_with_summary,
     list_sessions,
     search_sessions,
     delete_session,
     truncate_session,
     save_message,
     save_session_title,
+    get_session_message_count,
+    load_older_messages_for_summary,
+    save_session_summary,
 )
 from seraphim.memory.user_facts import (
     get_all_facts,
@@ -161,6 +165,88 @@ def _complexity_route(query: str) -> str:
     if _COMPLEX_RE.search(query):
         return "ollama_qwen7b"
     return "ollama_qwen3b"
+
+
+# ── Language detection ────────────────────────────────────────────────────────
+
+_FR_MARKERS = re.compile(
+    r"\b(?:je|tu|il|elle|nous|vous|ils|elles|"
+    r"le|la|les|un|une|des|du|au|aux|"
+    r"est|sont|était|c'est|qu'|j'|"
+    r"pourquoi|comment|quand|combien|"
+    r"merci|bonjour|salut|oui|non|"
+    r"avec|pour|dans|sur|sous|vers|chez|"
+    r"mais|donc|ainsi|car|puis|aussi)\b",
+    re.IGNORECASE,
+)
+_EN_MARKERS = re.compile(
+    r"\b(?:the|and|that|this|with|have|from|"
+    r"what|when|where|how|why|who|which|"
+    r"i'm|i've|i'll|i'd|it's|don't|can't|won't|isn't|"
+    r"please|hello|hi|thanks|thank|yes|no|"
+    r"but|also|because|so|then|just|"
+    r"you|your|we|our|they|their)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_language(text: str) -> str:
+    """Heuristic language detection returning 'fr', 'en', or 'auto'."""
+    sample = text[:300]
+    fr = len(_FR_MARKERS.findall(sample))
+    en = len(_EN_MARKERS.findall(sample))
+    # Accented chars are a strong French/Romance indicator
+    fr += sum(1 for c in sample if c in "éèêëàâçîïôûùüœæÉÈÊËÀÂÇÎÏÔÛÙÜŒÆ")
+    if fr > en + 2:
+        return "fr"
+    if en > fr + 2:
+        return "en"
+    return "auto"
+
+
+# ── Sliding summary buffer ────────────────────────────────────────────────────
+
+_SUMMARY_THRESHOLD = 30   # total messages before we start summarising
+_KEEP_RECENT = 20         # messages kept verbatim; older ones are summarised
+
+
+async def _generate_session_summary(session_id: str) -> None:
+    """Background: summarise older messages and persist the result."""
+    total = await get_session_message_count(session_id)
+    if total < _SUMMARY_THRESHOLD:
+        return
+
+    older = await load_older_messages_for_summary(session_id, keep_recent=_KEEP_RECENT)
+    if not older:
+        return
+
+    # Build a condensed transcript (cap to avoid blowing the context)
+    transcript = "\n".join(
+        f"{m['role'].upper()}: {(m.get('content') or '')[:150]}"
+        for m in older[-30:]
+    )
+    prompt = (
+        "Summarize the following conversation history in 3-5 concise bullet points. "
+        "Focus on key topics, decisions, and facts established. Max 200 words.\n\n"
+        + transcript
+    )
+
+    try:
+        from seraphim.engine import get_engine
+        eng = get_engine("ollama_qwen3b")
+        result = await eng.chat([{"role": "user", "content": prompt}])
+        msgs = result.get("messages", [])
+        summary = (msgs[-1].get("content", "") if msgs else "").strip()
+        if summary:
+            await save_session_summary(session_id, summary, total)
+    except Exception as exc:
+        logger.debug("Summary generation failed for session %s: %s", session_id, exc)
+
+
+async def _maybe_summarize_session(session_id: str) -> None:
+    total = await get_session_message_count(session_id)
+    if total >= _SUMMARY_THRESHOLD:
+        await _generate_session_summary(session_id)
 
 
 class ChatRequest(BaseModel):
@@ -674,9 +760,15 @@ def _build_agent(agent_name: str, engine_id: str):
     return ag
 
 
-async def _enrich_agent_context(ag, query: str) -> None:
-    """Inject user facts and RAG context into agent system prompt (mutates ag.system_prompt)."""
+async def _enrich_agent_context(
+    ag, query: str, session_summary: str | None = None
+) -> None:
+    """Inject summary, user facts, RAG context, and language hint into agent system prompt."""
     parts: list[str] = []
+
+    # Sliding summary of older conversation turns
+    if session_summary:
+        parts.append(f"[Summary of earlier conversation]\n{session_summary}")
 
     # User facts
     facts = await get_all_facts()
@@ -695,6 +787,13 @@ async def _enrich_agent_context(ag, query: str) -> None:
                 parts.append("Documents pertinents de la base de connaissances:\n\n" + format_context(results))
         except Exception as exc:
             logger.debug("RAG retrieval failed: %s", exc)
+
+    # Language instruction — always explicit to avoid small-model confusion
+    lang = _detect_language(query)
+    if lang == "en":
+        parts.append("The user is writing in English. Always reply in English.")
+    elif lang == "fr":
+        parts.append("L'utilisateur écrit en français. Réponds TOUJOURS en français.")
 
     if parts:
         ag.system_prompt = ag.system_prompt + "\n\n" + "\n\n".join(parts)
@@ -756,16 +855,19 @@ async def chat(req: ChatRequest):
 
 
 @app.post("/chat/stream", dependencies=[Depends(_require_api_key)])
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     engine_id = _resolve_engine_id(req)
     session_id = req.session_id or str(uuid.uuid4())
+    session_summary: str | None = None
 
     # Resolve agent routing and load session history in parallel when both are needed
     if req.session_id and not req.messages:
-        routed_agent, history = await asyncio.gather(
+        results = await asyncio.gather(
             _resolve_agent_name(req),
-            load_history(req.session_id, limit=20),
+            load_history_with_summary(req.session_id, keep_recent=_KEEP_RECENT),
         )
+        routed_agent = results[0]
+        history, session_summary = results[1]
         ctx = AgentContext(messages=history, session_id=session_id)
     else:
         routed_agent = await _resolve_agent_name(req)
@@ -777,7 +879,7 @@ async def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     effective_query, vision_unavailable = await _augment_query_with_image(req.query, req.image)
-    await _enrich_agent_context(ag, req.query)
+    await _enrich_agent_context(ag, req.query, session_summary=session_summary)
     trace_id = str(uuid.uuid4())
 
     async def generator():
@@ -821,9 +923,15 @@ async def chat_stream(req: ChatRequest):
             else:
                 chunks: list[str] = []
                 try:
+                    _i = 0
                     async for chunk in ag.stream(effective_query, ctx):
                         chunks.append(chunk)
                         yield chunk
+                        _i += 1
+                        if _i % 8 == 0 and await request.is_disconnected():
+                            logger.debug("Client disconnected — stopping stream for session %s", session_id)
+                            result = "".join(chunks)
+                            return
                 except (_httpx.ConnectError, ConnectionRefusedError, OSError) as exc:
                     # Primary Ollama unreachable — try fallback if configured and no output yet
                     from seraphim.settings import settings as _s
@@ -871,6 +979,7 @@ async def chat_stream(req: ChatRequest):
                 )),
             )
             asyncio.create_task(_extract_user_facts_background(req.query))
+            asyncio.create_task(_maybe_summarize_session(session_id))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")

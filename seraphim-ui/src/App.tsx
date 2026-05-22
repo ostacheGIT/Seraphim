@@ -43,7 +43,7 @@ export default function App() {
         speak,
         stopSpeaking,
     } = useSpeech({
-        lang: "fr-FR",
+        lang: navigator.language || "fr-FR",
         onTranscript: (transcript) => sendMessage(transcript),
         onError: (err) => console.error("Speech error:", err),
     });
