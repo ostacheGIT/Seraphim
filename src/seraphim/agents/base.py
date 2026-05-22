@@ -931,11 +931,14 @@ class ReActAgent(BaseAgent):
     name = "react"
     description = "Agent ReAct — lit des fichiers, cherche sur le web, raisonne étape par étape"
     _auto_trace = False  # manual step-level tracing in run()
+    _system_prompt_cache: str = ""
 
     @property
     def system_prompt(self) -> str:
+        if ReActAgent._system_prompt_cache:
+            return ReActAgent._system_prompt_cache
         cwd = Path.cwd().as_posix()
-        return (
+        ReActAgent._system_prompt_cache = (
             "You are Seraphim in ReAct mode. You can use tools to answer the user.\n"
             "To call a tool, write EXACTLY this format (nothing before or after):\n"
             "ACTION: tool_name\n"
@@ -970,6 +973,7 @@ class ReActAgent(BaseAgent):
             "7. Use think before complex multi-step reasoning to plan your approach.\n"
             "8. Use repl for stateful computation across multiple steps; use code_interpreter for one-shot scripts."
         )
+        return ReActAgent._system_prompt_cache
 
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         global _pending_code, _pending_file

@@ -323,6 +323,20 @@ async def health():
     }
 
 
+@app.post("/engine/warmup")
+async def engine_warmup(body: dict):
+    """Pre-load a model into Ollama memory so the first real request is fast."""
+    engine_id = body.get("engine_id", "ollama_qwen3b")
+    try:
+        eng = get_engine(engine_id)
+        # Drain a minimal streaming request — Ollama loads the model into VRAM during this call
+        async for _ in eng.stream_chat_api([{"role": "user", "content": "hi"}]):
+            pass
+        return {"status": "ready", "engine_id": engine_id}
+    except Exception as exc:
+        return {"status": "error", "engine_id": engine_id, "detail": str(exc)}
+
+
 @app.get("/models")
 async def list_models():
     return {
@@ -643,21 +657,23 @@ async def chat(req: ChatRequest):
 @app.post("/chat/stream", dependencies=[Depends(_require_api_key)])
 async def chat_stream(req: ChatRequest):
     engine_id = _resolve_engine_id(req)
-    routed_agent = await _resolve_agent_name(req)
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # Resolve agent routing and load session history in parallel when both are needed
+    if req.session_id and not req.messages:
+        routed_agent, history = await asyncio.gather(
+            _resolve_agent_name(req),
+            load_history(req.session_id, limit=20),
+        )
+        ctx = AgentContext(messages=history, session_id=session_id)
+    else:
+        routed_agent = await _resolve_agent_name(req)
+        ctx = AgentContext(messages=req.messages, session_id=session_id) if req.messages else AgentContext(session_id=session_id)
 
     try:
         ag = _build_agent(routed_agent, engine_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    session_id = req.session_id or str(uuid.uuid4())
-    if req.messages:
-        ctx = AgentContext(messages=req.messages, session_id=session_id)
-    elif req.session_id:
-        history = await load_history(req.session_id, limit=20)
-        ctx = AgentContext(messages=history, session_id=session_id)
-    else:
-        ctx = AgentContext(session_id=session_id)
 
     effective_query, vision_unavailable = await _augment_query_with_image(req.query, req.image)
     trace_id = str(uuid.uuid4())
@@ -692,22 +708,24 @@ async def chat_stream(req: ChatRequest):
                 result = "".join(chunks)
         finally:
             # Always save history and trace — even if the client disconnects mid-stream
-            await save_message(session_id, "user", req.query, routed_agent)
-            await save_message(session_id, "assistant", result, routed_agent)
             inf = await _get_engine_metrics(engine_id)
-            await save_trace(LearningTrace(
-                id=trace_id,
-                agent=routed_agent,
-                query=req.query,
-                final_response=result,
-                session_id=session_id,
-                tokens_in=inf.tokens_in if inf else len(req.query) // 4,
-                tokens_out=inf.tokens_out if inf else len(result) // 4,
-                ttft_ms=inf.ttft_ms if inf else 0.0,
-                throughput_tps=inf.throughput_tps if inf else 0.0,
-                gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
-                vram_used_mb=inf.vram_used_mb if inf else 0.0,
-            ))
+            await asyncio.gather(
+                save_message(session_id, "user", req.query, routed_agent),
+                save_message(session_id, "assistant", result, routed_agent),
+                save_trace(LearningTrace(
+                    id=trace_id,
+                    agent=routed_agent,
+                    query=req.query,
+                    final_response=result,
+                    session_id=session_id,
+                    tokens_in=inf.tokens_in if inf else len(req.query) // 4,
+                    tokens_out=inf.tokens_out if inf else len(result) // 4,
+                    ttft_ms=inf.ttft_ms if inf else 0.0,
+                    throughput_tps=inf.throughput_tps if inf else 0.0,
+                    gpu_util_pct=inf.gpu_util_pct if inf else 0.0,
+                    vram_used_mb=inf.vram_used_mb if inf else 0.0,
+                )),
+            )
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")

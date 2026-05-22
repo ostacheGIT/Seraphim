@@ -77,8 +77,16 @@ class BaseAgent(ABC):
         return get_engine(self.engine_id)
 
     async def _chat(self, messages) -> str:
-        """Call engine.chat() and extract the response string."""
-        result = await self.engine.chat(messages)
+        """Call engine and return the response string.
+        Uses streaming internally so the read timeout applies per token,
+        not on the total response — prevents ReadTimeout with slower models."""
+        eng = self.engine
+        if hasattr(eng, "stream_chat_api"):
+            chunks: list[str] = []
+            async for chunk in eng.stream_chat_api(messages):
+                chunks.append(chunk)
+            return "".join(chunks)
+        result = await eng.chat(messages)
         msgs = result.get("messages", [])
         return msgs[-1].get("content", "") if msgs else ""
 

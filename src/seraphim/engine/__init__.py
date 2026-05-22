@@ -51,7 +51,12 @@ def init_engines() -> None:
 
     # Always register Ollama engines as fallback
     register_engine("ollama_qwen3b", OllamaEngine(model="qwen2.5:3b", base_url=base_url), default=(provider == "ollama"))
-    register_engine("ollama_qwen7b", OllamaEngine(model="qwen2.5:7b", base_url=base_url), default=False)
+    register_engine("ollama_qwen7b", OllamaEngine(
+        model="qwen2.5:7b-instruct-q2_k",  # 3.0GB — fits in 4GB VRAM (q4_k_m 4.7GB did not)
+        base_url=base_url,
+        timeout=300.0,
+        options={"num_ctx": 2048},  # KV cache ~120MB at 2048 → total ~3.1GB, fits in VRAM
+    ), default=False)
 
     if provider == "vllm":
         from seraphim.engine.vllm import VLLMEngine

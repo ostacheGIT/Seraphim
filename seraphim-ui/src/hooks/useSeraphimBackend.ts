@@ -94,6 +94,16 @@ export async function askSeraphim(
   return { response: full, traceId };
 }
 
+export async function warmupEngine(engineId: string): Promise<void> {
+  try {
+    await fetch(`${BASE}/engine/warmup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engine_id: engineId }),
+    });
+  } catch { /* silent — warmup is best-effort */ }
+}
+
 export async function sendFeedback(traceId: string, score: number): Promise<void> {
   await fetch(`${BASE}/feedback`, {
     method: "POST",

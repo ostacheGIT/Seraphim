@@ -1,11 +1,10 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useConversation } from "./hooks/useConversation";
 import { useSpeech } from "./hooks/useSpeech";
-import { askSeraphim } from "./hooks/useSeraphimBackend";
+import { askSeraphim, warmupEngine } from "./hooks/useSeraphimBackend";
 import OrbScreen from "./components/OrbScreen";
 
 export default function App() {
-    const [input, setInput] = useState("");
     const [isThinking, setIsThinking] = useState(false);
     const [agentId, setAgentId] = useState<string>("auto");
     const [pendingImage, setPendingImage] = useState<string | null>(null);
@@ -42,12 +41,16 @@ export default function App() {
 
     speakRef.current = speak;
 
+    // Pre-load the model into Ollama memory whenever the engine changes
+    useEffect(() => {
+        warmupEngine(engineId);
+    }, [engineId]);
+
     const sendMessage = useCallback(
         async (text: string) => {
             const trimmed = text.trim();
             if ((!trimmed && !pendingImage) || isThinking) return;
             const imageSnapshot = pendingImage;
-            setInput("");
             setPendingImage(null);
             const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;
             addMessage(trimmed || "📎 Image", "user", undefined, undefined, imageDataUrl);
@@ -56,16 +59,25 @@ export default function App() {
             setIsThinking(true);
             let assistantMsgId: string | null = null;
             let accumulated = "";
+            let rafHandle: number | null = null;
+
+            const flushToState = () => {
+                rafHandle = null;
+                if (assistantMsgId === null) {
+                    assistantMsgId = addMessage(accumulated, "assistant", "streaming");
+                } else {
+                    updateMessage(assistantMsgId, accumulated, "streaming");
+                }
+            };
+
             try {
                 const { response, traceId } = await askSeraphim(
                     trimmed || "Analyse cette image.",
                     activeId ?? undefined,
                     (token) => {
                         accumulated += token;
-                        if (assistantMsgId === null) {
-                            assistantMsgId = addMessage(accumulated, "assistant", "streaming");
-                        } else {
-                            updateMessage(assistantMsgId, accumulated, "streaming");
+                        if (rafHandle === null) {
+                            rafHandle = requestAnimationFrame(flushToState);
                         }
                     },
                     (sentence) => speakRef.current?.(sentence),
@@ -75,6 +87,10 @@ export default function App() {
                     undefined,
                     abortCtrl.signal,
                 );
+                if (rafHandle !== null) {
+                    cancelAnimationFrame(rafHandle);
+                    rafHandle = null;
+                }
                 if (response || assistantMsgId === null) {
                     if (assistantMsgId === null) {
                         if (response) addMessage(response, "assistant", "done", traceId ?? undefined);
@@ -85,6 +101,7 @@ export default function App() {
                     updateMessage(assistantMsgId, accumulated, "done");
                 }
             } catch {
+                if (rafHandle !== null) cancelAnimationFrame(rafHandle);
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
                 if (assistantMsgId === null) {
                     addMessage(errMsg, "assistant", "error");
@@ -107,12 +124,10 @@ export default function App() {
             const idx = msgs.findIndex((m) => m.id === messageId);
             if (idx === -1) return;
 
-            // Context = messages before the edited one (for backend override)
             const contextMessages = msgs
                 .slice(0, idx)
                 .map((m) => ({ role: m.role, content: m.content }));
 
-            // DB keep = user messages before edit × 2 (each turn = user + assistant row)
             const dbKeepCount = msgs.slice(0, idx).filter((m) => m.role === "user").length * 2;
 
             replaceFromMessage(messageId, newContent);
@@ -123,16 +138,25 @@ export default function App() {
             setIsThinking(true);
             let assistantMsgId: string | null = null;
             let accumulated = "";
+            let rafHandle: number | null = null;
+
+            const flushToState = () => {
+                rafHandle = null;
+                if (assistantMsgId === null) {
+                    assistantMsgId = addMessage(accumulated, "assistant", "streaming");
+                } else {
+                    updateMessage(assistantMsgId, accumulated, "streaming");
+                }
+            };
+
             try {
                 const { response, traceId } = await askSeraphim(
                     newContent,
                     activeId,
                     (token) => {
                         accumulated += token;
-                        if (assistantMsgId === null) {
-                            assistantMsgId = addMessage(accumulated, "assistant", "streaming");
-                        } else {
-                            updateMessage(assistantMsgId, accumulated, "streaming");
+                        if (rafHandle === null) {
+                            rafHandle = requestAnimationFrame(flushToState);
                         }
                     },
                     (sentence) => speakRef.current?.(sentence),
@@ -142,6 +166,10 @@ export default function App() {
                     contextMessages,
                     abortCtrl.signal,
                 );
+                if (rafHandle !== null) {
+                    cancelAnimationFrame(rafHandle);
+                    rafHandle = null;
+                }
                 if (response || assistantMsgId === null) {
                     if (assistantMsgId === null) {
                         if (response) addMessage(response, "assistant", "done", traceId ?? undefined);
@@ -152,6 +180,7 @@ export default function App() {
                     updateMessage(assistantMsgId, accumulated, "done");
                 }
             } catch {
+                if (rafHandle !== null) cancelAnimationFrame(rafHandle);
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
                 if (assistantMsgId === null) {
                     addMessage(errMsg, "assistant", "error");
@@ -170,10 +199,6 @@ export default function App() {
         abortRef.current?.abort();
     }, []);
 
-    async function handleSend() {
-        await sendMessage(input);
-    }
-
     return (
         <OrbScreen
             conversation={active}
@@ -182,9 +207,7 @@ export default function App() {
             isListening={isListening}
             isThinking={isThinking}
             isSpeaking={isSpeaking}
-            input={input}
-            onInputChange={setInput}
-            onSend={handleSend}
+            onSend={sendMessage}
             onVoiceToggle={toggleListening}
             onStopSpeaking={stopSpeaking}
             onStop={stopGeneration}

@@ -25,10 +25,12 @@ class OllamaEngine:
             model: str = "qwen2.5:3b",
             base_url: str = "http://localhost:11434",
             timeout: float = 120.0,
+            options: dict | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.options = options or {}
         self.last_metrics: InferenceMetrics | None = None
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -97,7 +99,10 @@ class OllamaEngine:
             "model": self.model,
             "messages": clean_messages,
             "stream": False,
+            "keep_alive": "10m",
         }
+        if self.options:
+            payload["options"] = self.options
         if tools:
             payload["tools"] = tools
         # format kwarg (e.g. "json" or JSON schema dict) → structured output
@@ -185,7 +190,10 @@ class OllamaEngine:
             "model": self.model,
             "messages": clean_messages,
             "stream": True,
+            "keep_alive": "10m",
         }
+        if self.options:
+            payload["options"] = self.options
         if kwargs:
             payload.update(kwargs)
 

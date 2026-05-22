@@ -182,9 +182,13 @@ export default function MessageBubble({ message, onEdit, onStop }: MessageBubble
                         {message.imageUrl && (
                             <img src={message.imageUrl} alt="Image envoyée" className="msg-image" />
                         )}
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-                            {message.content}
-                        </ReactMarkdown>
+                        {message.status === "streaming" ? (
+                            <span className="msg-streaming-text">{message.content}</span>
+                        ) : (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                                {message.content}
+                            </ReactMarkdown>
+                        )}
                         {!isUser && message.traceId && <FeedbackButtons traceId={message.traceId} />}
                     </>
                 )}

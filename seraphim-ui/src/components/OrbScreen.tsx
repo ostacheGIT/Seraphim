@@ -14,9 +14,7 @@ interface OrbScreenProps {
     isListening: boolean;
     isThinking: boolean;
     isSpeaking: boolean;
-    input: string;
-    onInputChange: (v: string) => void;
-    onSend: () => void;
+    onSend: (text: string) => void;
     onVoiceToggle: () => void;
     onStopSpeaking: () => void;
     onSelectConversation: (id: string) => void;
@@ -49,8 +47,6 @@ export default function OrbScreen({
     isListening,
     isThinking,
     isSpeaking,
-    input,
-    onInputChange,
     onSend,
     onVoiceToggle,
     onStopSpeaking,
@@ -139,8 +135,17 @@ export default function OrbScreen({
         chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [conversation?.messages]);
 
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    const handleSendInput = () => {
+        const text = inputRef.current?.value ?? "";
+        if (!text.trim() && !pendingImage) return;
+        onSend(text);
+        if (inputRef.current) inputRef.current.value = "";
+    };
+
     const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter") onSend();
+        if (e.key === "Enter") handleSendInput();
     };
 
     const orbState = isListening ? "listening"
@@ -310,9 +315,9 @@ export default function OrbScreen({
                                 </div>
                             )}
                             <input
+                                ref={inputRef}
                                 type="text"
-                                value={input}
-                                onChange={(e) => onInputChange(e.target.value)}
+                                defaultValue=""
                                 onKeyDown={handleKeyDown}
                                 onPaste={(e) => {
                                     const items = e.clipboardData?.items;
