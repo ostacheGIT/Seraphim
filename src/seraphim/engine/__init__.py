@@ -55,7 +55,7 @@ def init_engines() -> None:
         model="qwen2.5:7b-instruct-q2_k",  # 3.0GB — fits in 4GB VRAM (q4_k_m 4.7GB did not)
         base_url=base_url,
         timeout=300.0,
-        options={"num_ctx": 2048},  # KV cache ~120MB at 2048 → total ~3.1GB, fits in VRAM
+        options={"num_ctx": 8192},  # KV cache ~900MB at 8192 → total ~3.9GB, fits in 4GB VRAM
     ), default=False)
 
     if provider == "vllm":

@@ -65,7 +65,7 @@ export default function App() {
 
             // Prepend file content to message if present
             const fullText = fileSnapshot
-                ? `${trimmed}\n\n[Fichier joint: ${fileSnapshot.name}]\n\n${fileSnapshot.content}`
+                ? `${trimmed || "Analyse ce fichier et résume son contenu."}\n\n[Fichier joint: ${fileSnapshot.name}]\n\n${fileSnapshot.content}`
                 : trimmed;
 
             const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;

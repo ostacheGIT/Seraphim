@@ -51,7 +51,11 @@ const BASE_AGENTS = [
     { id: "skill:think",            label: "🧠 Raisonnement" },
 ];
 
+const MAX_FILE_CHARS = 24_000; // ~6 000 tokens — fits comfortably in 8192 num_ctx
+
 async function extractFileText(file: File): Promise<{ name: string; content: string }> {
+    let content: string;
+
     if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
         const buffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
@@ -60,11 +64,18 @@ async function extractFileText(file: File): Promise<{ name: string; content: str
             const page = await pdf.getPage(i);
             const textContent = await page.getTextContent();
             pages.push(textContent.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+            if (pages.join("\n\n").length > MAX_FILE_CHARS) break;
         }
-        return { name: file.name, content: pages.join("\n\n") };
+        content = pages.join("\n\n");
+    } else {
+        content = await file.text();
     }
-    const text = await file.text();
-    return { name: file.name, content: text };
+
+    if (content.length > MAX_FILE_CHARS) {
+        content = content.slice(0, MAX_FILE_CHARS) + `\n\n[… contenu tronqué à ${MAX_FILE_CHARS} caractères]`;
+    }
+
+    return { name: file.name, content };
 }
 
 export default function OrbScreen({
