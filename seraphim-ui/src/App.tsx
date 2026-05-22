@@ -1,13 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useConversation } from "./hooks/useConversation";
 import { useSpeech } from "./hooks/useSpeech";
-import { askSeraphim, warmupEngine } from "./hooks/useSeraphimBackend";
+import { askSeraphim, warmupEngine, generateSessionTitle } from "./hooks/useSeraphimBackend";
+import { useTheme } from "./hooks/useTheme";
 import OrbScreen from "./components/OrbScreen";
 
 export default function App() {
     const [isThinking, setIsThinking] = useState(false);
     const [agentId, setAgentId] = useState<string>("auto");
     const [pendingImage, setPendingImage] = useState<string | null>(null);
+    const [pendingFile, setPendingFile] = useState<{ name: string; content: string } | null>(null);
+
+    const { theme, toggleTheme } = useTheme();
 
     const {
         conversations,
@@ -22,6 +26,7 @@ export default function App() {
         updateMessage,
         replaceFromMessage,
         truncateMessages,
+        updateConversationTitle,
     } = useConversation();
 
     const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
@@ -49,11 +54,22 @@ export default function App() {
     const sendMessage = useCallback(
         async (text: string) => {
             const trimmed = text.trim();
-            if ((!trimmed && !pendingImage) || isThinking) return;
+            if ((!trimmed && !pendingImage && !pendingFile) || isThinking) return;
             const imageSnapshot = pendingImage;
+            const fileSnapshot = pendingFile;
             setPendingImage(null);
+            setPendingFile(null);
+
+            const isFirstExchange = !active || active.messages.filter((m) => m.role === "user").length === 0;
+            const currentSessionId = activeId;
+
+            // Prepend file content to message if present
+            const fullText = fileSnapshot
+                ? `${trimmed}\n\n[Fichier joint: ${fileSnapshot.name}]\n\n${fileSnapshot.content}`
+                : trimmed;
+
             const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;
-            addMessage(trimmed || "📎 Image", "user", undefined, undefined, imageDataUrl);
+            addMessage(trimmed || (fileSnapshot ? `📎 ${fileSnapshot.name}` : "📎 Image"), "user", undefined, undefined, imageDataUrl);
             const abortCtrl = new AbortController();
             abortRef.current = abortCtrl;
             setIsThinking(true);
@@ -72,7 +88,7 @@ export default function App() {
 
             try {
                 const { response, traceId } = await askSeraphim(
-                    trimmed || "Analyse cette image.",
+                    fullText || "Analyse cette image.",
                     activeId ?? undefined,
                     (token) => {
                         accumulated += token;
@@ -100,6 +116,12 @@ export default function App() {
                 } else if (assistantMsgId !== null) {
                     updateMessage(assistantMsgId, accumulated, "done");
                 }
+                // Generate LLM title after first exchange (fire and forget)
+                if (isFirstExchange && currentSessionId) {
+                    generateSessionTitle(currentSessionId).then((title) => {
+                        if (title) updateConversationTitle(currentSessionId, title);
+                    });
+                }
             } catch {
                 if (rafHandle !== null) cancelAnimationFrame(rafHandle);
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
@@ -114,7 +136,7 @@ export default function App() {
                 setIsThinking(false);
             }
         },
-        [isThinking, addMessage, updateMessage, activeId, engineId, agentId, pendingImage],
+        [isThinking, addMessage, updateMessage, activeId, active, engineId, agentId, pendingImage, pendingFile, updateConversationTitle],
     );
 
     const editMessage = useCallback(
@@ -221,6 +243,10 @@ export default function App() {
             onAgentChange={setAgentId}
             pendingImage={pendingImage}
             onImageChange={setPendingImage}
+            pendingFile={pendingFile}
+            onFileChange={setPendingFile}
+            theme={theme}
+            onThemeToggle={toggleTheme}
         />
     );
 }

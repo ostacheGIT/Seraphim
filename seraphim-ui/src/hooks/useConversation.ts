@@ -196,6 +196,12 @@ export function useConversation() {
       [activeId],
   );
 
+  const updateConversationTitle = useCallback((id: string, title: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title } : c))
+    );
+  }, []);
+
   return {
     conversations,
     activeId,
@@ -209,5 +215,6 @@ export function useConversation() {
     updateMessage,
     replaceFromMessage,
     truncateMessages,
+    updateConversationTitle,
   };
 }

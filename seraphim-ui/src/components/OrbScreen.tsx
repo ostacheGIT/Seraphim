@@ -1,11 +1,18 @@
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Plus, Trash2, BookOpen, VolumeX } from "lucide-react";
+import { Plus, Trash2, BookOpen, VolumeX, Sun, Moon, Paperclip, X } from "lucide-react";
+import * as pdfjsLib from "pdfjs-dist";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
+import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
 import { fetchInstalledSkills } from "../hooks/useSeraphimBackend";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.mjs",
+    import.meta.url,
+).href;
 
 interface OrbScreenProps {
     conversation: Conversation | null;
@@ -26,6 +33,10 @@ interface OrbScreenProps {
     onAgentChange: (id: string) => void;
     pendingImage?: string | null;
     onImageChange?: (img: string | null) => void;
+    pendingFile?: { name: string; content: string } | null;
+    onFileChange?: (file: { name: string; content: string } | null) => void;
+    theme?: Theme;
+    onThemeToggle?: () => void;
     onEditMessage?: (messageId: string, newContent: string) => void;
     onStop?: () => void;
 }
@@ -39,6 +50,22 @@ const BASE_AGENTS = [
     { id: "skill:code_interpreter", label: "🐍 Code" },
     { id: "skill:think",            label: "🧠 Raisonnement" },
 ];
+
+async function extractFileText(file: File): Promise<{ name: string; content: string }> {
+    if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+        const buffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+        const pages: string[] = [];
+        for (let i = 1; i <= Math.min(pdf.numPages, 30); i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            pages.push(textContent.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+        }
+        return { name: file.name, content: pages.join("\n\n") };
+    }
+    const text = await file.text();
+    return { name: file.name, content: text };
+}
 
 export default function OrbScreen({
     conversation,
@@ -59,6 +86,10 @@ export default function OrbScreen({
     onAgentChange,
     pendingImage,
     onImageChange,
+    pendingFile,
+    onFileChange,
+    theme = "dark",
+    onThemeToggle,
     onEditMessage,
     onStop,
 }: OrbScreenProps) {
@@ -173,6 +204,16 @@ export default function OrbScreen({
                 aria-label="Menu"
             >
                 <span /><span /><span />
+            </button>
+
+            {/* ── Bouton thème (droite, avant catalogue) ─────────────── */}
+            <button
+                className="theme-toggle-btn"
+                onClick={onThemeToggle}
+                aria-label={theme === "dark" ? "Mode clair" : "Mode sombre"}
+                title={theme === "dark" ? "Mode clair" : "Mode sombre"}
+            >
+                {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             </button>
 
             {/* ── Bouton catalogue (droite) ──────────────────────────── */}
@@ -300,58 +341,111 @@ export default function OrbScreen({
                             <div ref={chatBottomRef} />
                         </div>
                         <div className="chat-input-area">
-                            {pendingImage && (
-                                <div className="img-preview-wrap">
-                                    <img
-                                        src={`data:image/png;base64,${pendingImage}`}
-                                        alt="Image à envoyer"
-                                        className="img-preview"
-                                    />
-                                    <button
-                                        className="img-preview-remove"
-                                        onClick={() => onImageChange?.(null)}
-                                        aria-label="Supprimer l'image"
-                                    >✕</button>
+                            {(pendingImage || pendingFile) && (
+                                <div className="input-attachments">
+                                    {pendingImage && (
+                                        <div className="img-preview-wrap">
+                                            <img
+                                                src={`data:image/png;base64,${pendingImage}`}
+                                                alt="Image à envoyer"
+                                                className="img-preview"
+                                            />
+                                            <button
+                                                className="img-preview-remove"
+                                                onClick={() => onImageChange?.(null)}
+                                                aria-label="Supprimer l'image"
+                                            >✕</button>
+                                        </div>
+                                    )}
+                                    {pendingFile && (
+                                        <div className="file-preview-wrap">
+                                            <Paperclip size={11} />
+                                            <span className="file-preview-name">{pendingFile.name}</span>
+                                            <button
+                                                className="file-preview-remove"
+                                                onClick={() => onFileChange?.(null)}
+                                                aria-label="Supprimer le fichier"
+                                            >
+                                                <X size={10} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
-                            <input
-                                ref={inputRef}
-                                type="text"
-                                defaultValue=""
-                                onKeyDown={handleKeyDown}
-                                onPaste={(e) => {
-                                    const items = e.clipboardData?.items;
-                                    if (!items) return;
-                                    for (const item of Array.from(items)) {
-                                        if (item.type.startsWith("image/")) {
-                                            e.preventDefault();
-                                            const file = item.getAsFile();
-                                            if (!file) continue;
+                            <div className="chat-input-row">
+                                <label className="file-attach-btn" title="Joindre un fichier (PDF, TXT, MD…)">
+                                    <input
+                                        type="file"
+                                        accept=".pdf,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.html,.css,.yaml,.yml"
+                                        style={{ display: "none" }}
+                                        onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            e.target.value = "";
+                                            const extracted = await extractFileText(file);
+                                            onFileChange?.(extracted);
+                                        }}
+                                    />
+                                    <Paperclip size={13} />
+                                </label>
+                                <input
+                                    ref={inputRef}
+                                    type="text"
+                                    defaultValue=""
+                                    onKeyDown={handleKeyDown}
+                                    onPaste={(e) => {
+                                        const items = e.clipboardData?.items;
+                                        if (!items) return;
+                                        for (const item of Array.from(items)) {
+                                            if (item.type.startsWith("image/")) {
+                                                e.preventDefault();
+                                                const file = item.getAsFile();
+                                                if (!file) continue;
+                                                const reader = new FileReader();
+                                                reader.onload = () => {
+                                                    const result = reader.result as string;
+                                                    onImageChange?.(result.split(",")[1]);
+                                                };
+                                                reader.readAsDataURL(file);
+                                                break;
+                                            }
+                                        }
+                                    }}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={async (e) => {
+                                        e.preventDefault();
+                                        const files = Array.from(e.dataTransfer.files);
+                                        const imgFile = files.find((f) => f.type.startsWith("image/"));
+                                        if (imgFile) {
                                             const reader = new FileReader();
                                             reader.onload = () => {
                                                 const result = reader.result as string;
                                                 onImageChange?.(result.split(",")[1]);
                                             };
-                                            reader.readAsDataURL(file);
-                                            break;
+                                            reader.readAsDataURL(imgFile);
+                                            return;
                                         }
+                                        const textFile = files.find(
+                                            (f) =>
+                                                f.type === "application/pdf" ||
+                                                f.type.startsWith("text/") ||
+                                                /\.(pdf|txt|md|py|js|ts|json|csv|xml|html|css|yaml|yml)$/i.test(f.name),
+                                        );
+                                        if (textFile) {
+                                            const extracted = await extractFileText(textFile);
+                                            onFileChange?.(extracted);
+                                        }
+                                    }}
+                                    placeholder={
+                                        pendingImage
+                                            ? "Ajoutez un message (optionnel)…"
+                                            : pendingFile
+                                            ? `${pendingFile.name} joint — posez votre question…`
+                                            : "Tapez un message, collez une image ou déposez un fichier…"
                                     }
-                                }}
-                                onDragOver={(e) => e.preventDefault()}
-                                onDrop={(e) => {
-                                    e.preventDefault();
-                                    const file = Array.from(e.dataTransfer.files).find(f => f.type.startsWith("image/"));
-                                    if (!file) return;
-                                    const reader = new FileReader();
-                                    reader.onload = () => {
-                                        const result = reader.result as string;
-                                        onImageChange?.(result.split(",")[1]);
-                                    };
-                                    reader.readAsDataURL(file);
-                                }}
-                                placeholder={pendingImage ? "Ajoutez un message (optionnel)…" : "Tapez un message ou collez une image…"}
-                                className="chat-input"
-                            />
+                                    className="chat-input"
+                                />
+                            </div>
                         </div>
                     </>
                 )}

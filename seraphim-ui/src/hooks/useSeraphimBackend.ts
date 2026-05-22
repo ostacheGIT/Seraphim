@@ -156,3 +156,12 @@ export async function buildSkillCatalog(): Promise<number> {
   const data = await res.json();
   return data.indexed ?? 0;
 }
+
+export async function generateSessionTitle(sessionId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE}/memory/sessions/${sessionId}/title`, { method: "POST" });
+    if (!res.ok) return null;
+    const data = await res.json() as { title: string };
+    return data.title || null;
+  } catch { return null; }
+}

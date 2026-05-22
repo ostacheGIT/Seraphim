@@ -30,6 +30,7 @@ from seraphim.memory.store import (
     delete_session,
     truncate_session,
     save_message,
+    save_session_title,
 )
 from seraphim.learning.trace_store import (
     save_trace,
@@ -781,6 +782,48 @@ class TruncateRequest(BaseModel):
 async def truncate_session_endpoint(session_id: str, req: TruncateRequest):
     await truncate_session(session_id, req.keep_count)
     return {"ok": True, "session_id": session_id, "kept": req.keep_count}
+
+
+@app.post("/memory/sessions/{session_id}/title")
+async def generate_session_title(session_id: str):
+    """Génère un titre court via LLM pour la session et le persiste."""
+    messages = await load_history(session_id, limit=4)
+    if not messages:
+        return {"title": session_id}
+
+    context = "\n".join(
+        f"{m['role']}: {m['content'][:300]}" for m in messages[:2]
+    )
+    prompt = [{
+        "role": "user",
+        "content": (
+            f"Génère un titre court (3-5 mots, sans guillemets ni ponctuation finale) "
+            f"qui résume cette conversation:\n\n{context}\n\nTitre:"
+        ),
+    }]
+
+    engine = get_engine()
+    parts: list[str] = []
+    try:
+        if hasattr(engine, "stream_chat_api"):
+            async for chunk in engine.stream_chat_api(prompt):
+                parts.append(chunk)
+                if len("".join(parts)) > 80:
+                    break
+        else:
+            result = await engine.chat(prompt)
+            msgs = result.get("messages", [])
+            parts = [msgs[-1].get("content", "") if msgs else ""]
+    except Exception:
+        pass
+
+    title = "".join(parts).strip().split("\n")[0].strip("\"'").strip()
+    if not title or len(title) > 60:
+        first_user = next((m["content"] for m in messages if m["role"] == "user"), session_id)
+        title = first_user[:40] + ("..." if len(first_user) > 40 else "")
+
+    await save_session_title(session_id, title)
+    return {"title": title}
 
 
 # ─── TTS / Voice ─────────────────────────────────────────────────────────────

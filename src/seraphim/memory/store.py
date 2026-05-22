@@ -55,13 +55,13 @@ async def load_history(session: str, limit: int = 50) -> list[dict[str, str]]:
 
 
 async def list_sessions() -> list[dict]:
-    """Retourne la liste des sessions avec le premier message user comme titre."""
+    """Retourne la liste des sessions avec le titre LLM ou le premier message user."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
                               SELECT
                                   c.session,
                                   c.agent,
-                                  first_msg.content  AS title,
+                                  COALESCE(first_msg.title, first_msg.content) AS title,
                                   c.timestamp        AS updated_at
                               FROM conversations c
                                        JOIN (
@@ -86,6 +86,19 @@ async def list_sessions() -> list[dict]:
         }
         for r in rows
     ]
+
+
+async def save_session_title(session: str, title: str) -> None:
+    """Sauvegarde un titre généré par LLM sur la première ligne user de la session."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE conversations SET title = ?
+            WHERE id = (
+                SELECT MIN(id) FROM conversations
+                WHERE session = ? AND role = 'user'
+            )
+        """, (title, session))
+        await db.commit()
 
 
 async def delete_session(session: str) -> None:
