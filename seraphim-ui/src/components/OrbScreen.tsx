@@ -477,6 +477,7 @@ export default function OrbScreen({
             <div className={`orb-stage ${orbShift}`}>
                 <SphereGL
                     state={orbState}
+                    theme={theme}
                     onClick={() => {
                         if (!activeId) onNewConversation();
                         onVoiceToggle();

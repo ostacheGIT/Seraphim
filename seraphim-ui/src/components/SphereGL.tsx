@@ -1,22 +1,33 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { Theme } from "../hooks/useTheme";
 
 interface SphereGLProps {
     state: "idle" | "listening" | "thinking" | "speaking";
     onClick: () => void;
+    theme?: Theme;
 }
 
-const STATE_CONFIG = {
+const STATE_DARK = {
     idle:      { color: 0xf5f5f5, speed: 0.003, size: 2.8, opacity: 0.55, pulseAmp: 0.0 },
     listening: { color: 0xffffff, speed: 0.018, size: 2.9, opacity: 0.85, pulseAmp: 0.2 },
     thinking:  { color: 0x64b4ff, speed: 0.006, size: 2.9, opacity: 0.6,  pulseAmp: 0.04 },
     speaking:  { color: 0xb464ff, speed: 0.014, size: 3.0, opacity: 0.9,  pulseAmp: 0.2 },
 };
 
-export default function SphereGL({ state, onClick }: SphereGLProps) {
+const STATE_LIGHT = {
+    idle:      { color: 0x1a1a2e, speed: 0.003, size: 2.8, opacity: 0.60, pulseAmp: 0.0 },
+    listening: { color: 0x0d0d1e, speed: 0.018, size: 2.9, opacity: 0.88, pulseAmp: 0.2 },
+    thinking:  { color: 0x1a5fd4, speed: 0.006, size: 2.9, opacity: 0.65, pulseAmp: 0.04 },
+    speaking:  { color: 0x7020cc, speed: 0.014, size: 3.0, opacity: 0.88, pulseAmp: 0.2 },
+};
+
+export default function SphereGL({ state, onClick, theme = "dark" }: SphereGLProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const stateRef = useRef(state);
+    const themeRef = useRef(theme);
     stateRef.current = state;
+    themeRef.current = theme;
 
     useEffect(() => {
         const canvas = canvasRef.current!;
@@ -55,11 +66,14 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(positions.slice(), 3));
 
+        const initColor = themeRef.current === "light" ? 0x1a1a2e : 0xf5f5f5;
+        const initOpacity = themeRef.current === "light" ? 0.60 : 0.55;
+
         const mat = new THREE.PointsMaterial({
-            color: 0xf5f5f5,
+            color: initColor,
             size: 0.028,
             transparent: true,
-            opacity: 0.55,
+            opacity: initOpacity,
             sizeAttenuation: true,
             depthWrite: false,
         });
@@ -69,7 +83,7 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
 
         // ── Lignes de latitude légères ─────────────────────────────
         const lineMat = new THREE.LineBasicMaterial({
-            color: 0xf5f5f5,
+            color: initColor,
             transparent: true,
             opacity: 0.1,
         });
@@ -111,7 +125,8 @@ export default function SphereGL({ state, onClick }: SphereGLProps) {
             raf = requestAnimationFrame(animate);
             t += 0.016;
 
-            const cfg = STATE_CONFIG[stateRef.current];
+            const configs = themeRef.current === "light" ? STATE_LIGHT : STATE_DARK;
+            const cfg = configs[stateRef.current];
 
             // Lerp couleur et opacité
             const target = new THREE.Color(cfg.color);
