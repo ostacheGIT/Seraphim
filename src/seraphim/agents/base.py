@@ -935,6 +935,8 @@ class ReActAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
+        if hasattr(self, "_system_prompt_override"):
+            return self._system_prompt_override  # type: ignore[attr-defined]
         if ReActAgent._system_prompt_cache:
             return ReActAgent._system_prompt_cache
         cwd = Path.cwd().as_posix()
@@ -974,6 +976,10 @@ class ReActAgent(BaseAgent):
             "8. Use repl for stateful computation across multiple steps; use code_interpreter for one-shot scripts."
         )
         return ReActAgent._system_prompt_cache
+
+    @system_prompt.setter
+    def system_prompt(self, value: str) -> None:
+        self._system_prompt_override = value
 
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         global _pending_code, _pending_file
