@@ -46,6 +46,13 @@ export default function App() {
 
     speakRef.current = speak;
 
+    // Request desktop notification permission once
+    useEffect(() => {
+        if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission();
+        }
+    }, []);
+
     // Pre-load the model into Ollama memory whenever the engine changes
     useEffect(() => {
         warmupEngine(engineId);
@@ -57,6 +64,7 @@ export default function App() {
             if ((!trimmed && !pendingImage && !pendingFile) || isThinking) return;
             const imageSnapshot = pendingImage;
             const fileSnapshot = pendingFile;
+            const sendStart = Date.now();
             setPendingImage(null);
             setPendingFile(null);
 
@@ -134,6 +142,18 @@ export default function App() {
             } finally {
                 abortRef.current = null;
                 setIsThinking(false);
+                const elapsed = Date.now() - sendStart;
+                if (
+                    elapsed > 3000 &&
+                    !document.hasFocus() &&
+                    "Notification" in window &&
+                    Notification.permission === "granted"
+                ) {
+                    new Notification("Seraphim", {
+                        body: "Votre réponse est prête.",
+                        silent: true,
+                    });
+                }
             }
         },
         [isThinking, addMessage, updateMessage, activeId, active, engineId, agentId, pendingImage, pendingFile, updateConversationTitle],

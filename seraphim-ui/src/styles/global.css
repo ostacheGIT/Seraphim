@@ -1617,6 +1617,157 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
     color: #ffffff;
 }
 
+/* ─── Send button ───────────────────────────────────────────── */
+.send-btn {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: rgba(245, 245, 245, 0.75);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.send-btn:hover:not(.disabled) {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.send-btn.disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+[data-theme="light"] .send-btn {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(20, 20, 40, 0.2);
+    color: rgba(20, 20, 40, 0.65);
+}
+
+[data-theme="light"] .send-btn:hover:not(.disabled) {
+    background: rgba(0, 0, 0, 0.1);
+    color: rgba(20, 20, 40, 0.9);
+    border-color: rgba(20, 20, 40, 0.35);
+}
+
+/* ─── Message timestamp ─────────────────────────────────────── */
+.msg-timestamp {
+    opacity: 0;
+    font-size: 9px;
+    color: var(--text-faint);
+    margin-left: 0.55em;
+    letter-spacing: 0.02em;
+    transition: opacity 0.18s;
+    pointer-events: none;
+    user-select: none;
+}
+
+.chat-msg:hover .msg-timestamp {
+    opacity: 1;
+}
+
+/* ─── Export button & dropdown ──────────────────────────────── */
+.export-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.export-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.export-btn:hover {
+    background: var(--stripe-hov);
+    color: var(--text);
+}
+
+.export-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-mid);
+    border-radius: 8px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 200;
+    min-width: 110px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+.export-menu button {
+    background: none;
+    border: none;
+    color: var(--text-soft);
+    font-size: 11px;
+    font-family: 'Rajdhani', sans-serif;
+    letter-spacing: 0.06em;
+    padding: 5px 10px;
+    border-radius: 5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.export-menu button:hover {
+    background: var(--stripe-hov);
+    color: var(--text);
+}
+
+[data-theme="light"] .export-menu {
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.export-toast {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    font-family: 'Share Tech Mono', monospace;
+    padding: 4px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    animation: toast-in 0.18s ease;
+    z-index: 210;
+}
+
+.export-toast.ok {
+    background: rgba(74, 222, 128, 0.15);
+    border: 1px solid rgba(74, 222, 128, 0.35);
+    color: #4ade80;
+}
+
+.export-toast.error {
+    background: rgba(248, 113, 113, 0.15);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    color: #f87171;
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ─── RAG status bar ────────────────────────────────────────── */
 .rag-status-bar {
     display: flex;

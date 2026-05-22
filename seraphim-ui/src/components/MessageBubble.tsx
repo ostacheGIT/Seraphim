@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Copy, Check, Terminal, Pencil, Square } from "lucide-react";
 import { Message } from "../types";
 import ReactMarkdown from "react-markdown";
@@ -117,6 +117,10 @@ const MD_COMPONENTS = {
     pre: ({ children }: React.ComponentPropsWithoutRef<"pre">) => <>{children}</>,
 };
 
+function formatTimestamp(date: Date): string {
+    return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function MessageBubble({ message, onEdit, onStop }: MessageBubbleProps) {
     const isUser = message.role === "user";
     const [isEditing, setIsEditing] = useState(false);
@@ -143,10 +147,18 @@ export default function MessageBubble({ message, onEdit, onStop }: MessageBubble
         setIsEditing(false);
     };
 
+    // Always render markdown — even during streaming. Batched by RAF in App.tsx so max 60fps.
+    const renderedMarkdown = useMemo(() => (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+            {message.content}
+        </ReactMarkdown>
+    ), [message.content]);
+
     return (
         <div className={`chat-msg ${isUser ? "user" : "assistant"}`}>
             <div className="msg-role">
                 {isUser ? "VOUS" : "SERAPHIM"}
+                <span className="msg-timestamp">{formatTimestamp(message.timestamp)}</span>
                 {isUser && onEdit && !isEditing && (
                     <button className="msg-edit-btn" onClick={handleEditStart} aria-label="Modifier">
                         <Pencil size={10} />
@@ -182,13 +194,7 @@ export default function MessageBubble({ message, onEdit, onStop }: MessageBubble
                         {message.imageUrl && (
                             <img src={message.imageUrl} alt="Image envoyée" className="msg-image" />
                         )}
-                        {message.status === "streaming" ? (
-                            <span className="msg-streaming-text">{message.content}</span>
-                        ) : (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-                                {message.content}
-                            </ReactMarkdown>
-                        )}
+                        {renderedMarkdown}
                         {!isUser && message.traceId && <FeedbackButtons traceId={message.traceId} />}
                     </>
                 )}

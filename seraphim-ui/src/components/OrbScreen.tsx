@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Plus, Trash2, BookOpen, VolumeX, Sun, Moon, Paperclip, X } from "lucide-react";
+import { Plus, Trash2, BookOpen, VolumeX, Sun, Moon, Paperclip, X, Send, Download } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import { Conversation } from "../types";
 import type { EngineId } from "../hooks/useConversation";
@@ -52,6 +52,40 @@ const BASE_AGENTS = [
 ];
 
 const MAX_FILE_CHARS = 24_000; // ~6 000 tokens — fits comfortably in 8192 num_ctx
+
+function exportConversation(conv: import("../types").Conversation, format: "markdown" | "json"): boolean {
+    try {
+        let content: string;
+        let filename: string;
+        let mime: string;
+        if (format === "json") {
+            content = JSON.stringify(
+                conv.messages.map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
+                null, 2,
+            );
+            filename = `seraphim-${conv.id}.json`;
+            mime = "application/json";
+        } else {
+            const header = `# ${conv.title}\n\n`;
+            const body = conv.messages
+                .map((m) => `## ${m.role === "user" ? "Vous" : "Seraphim"}\n\n${m.content}`)
+                .join("\n\n---\n\n");
+            content = header + body;
+            filename = `seraphim-${conv.id}.md`;
+            mime = "text/markdown";
+        }
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 async function extractFileText(file: File): Promise<{ name: string; content: string }> {
     let content: string;
@@ -114,6 +148,9 @@ export default function OrbScreen({
     const [installedSkillAgents, setInstalledSkillAgents] = useState<{ id: string; label: string }[]>([]);
     const [ragCount, setRagCount]         = useState(0);
     const [ragIngesting, setRagIngesting] = useState(false);
+    const [exportOpen, setExportOpen]     = useState(false);
+    const [exportToast, setExportToast]   = useState<"ok" | "error" | null>(null);
+    const exportToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const chatBottomRef = useRef<HTMLDivElement>(null);
 
     const refreshInstalledSkills = () => {
@@ -128,6 +165,15 @@ export default function OrbScreen({
 
     const refreshRagStatus = () => {
         getRagStatus().then((s) => setRagCount(s.doc_count));
+    };
+
+    const triggerExport = (format: "markdown" | "json") => {
+        if (!conversation) return;
+        const ok = exportConversation(conversation, format);
+        setExportOpen(false);
+        if (exportToastTimer.current) clearTimeout(exportToastTimer.current);
+        setExportToast(ok ? "ok" : "error");
+        exportToastTimer.current = setTimeout(() => setExportToast(null), 2500);
     };
 
     useEffect(() => {
@@ -265,6 +311,28 @@ export default function OrbScreen({
                             <span className="panel-title" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {conversation?.title ?? "Conversation"}
                             </span>
+                            {conversation && (
+                                <div className="export-wrap">
+                                    <button
+                                        className="export-btn"
+                                        title="Exporter la conversation"
+                                        onClick={() => setExportOpen((p) => !p)}
+                                    >
+                                        <Download size={12} />
+                                    </button>
+                                    {exportOpen && (
+                                        <div className="export-menu">
+                                            <button onClick={() => triggerExport("markdown")}>Markdown</button>
+                                            <button onClick={() => triggerExport("json")}>JSON</button>
+                                        </div>
+                                    )}
+                                    {exportToast && (
+                                        <div className={`export-toast ${exportToast}`}>
+                                            {exportToast === "ok" ? "Téléchargé ✓" : "Erreur ✗"}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </>
                     ) : (
                         <>
@@ -497,6 +565,15 @@ export default function OrbScreen({
                                     }
                                     className="chat-input"
                                 />
+                                <button
+                                    className={`send-btn ${isThinking ? "disabled" : ""}`}
+                                    onClick={handleSendInput}
+                                    disabled={isThinking}
+                                    aria-label="Envoyer"
+                                    title="Envoyer (Entrée)"
+                                >
+                                    <Send size={13} />
+                                </button>
                             </div>
                         </div>
                     </>
