@@ -21,6 +21,7 @@ interface OrbScreenProps {
     isListening: boolean;
     isThinking: boolean;
     isSpeaking: boolean;
+    voiceError?: string | null;
     onSend: (text: string) => void;
     onVoiceToggle: () => void;
     onStopSpeaking: () => void;
@@ -119,6 +120,7 @@ export default function OrbScreen({
     isListening,
     isThinking,
     isSpeaking,
+    voiceError,
     onSend,
     onVoiceToggle,
     onStopSpeaking,
@@ -250,8 +252,9 @@ export default function OrbScreen({
         : isThinking  ? "thinking"
         : "idle";
 
-    const statusText = isListening ? "● écoute en cours..."
-        : isSpeaking ? "◈ Seraphim parle..."
+    const statusText = voiceError   ? `⚠ ${voiceError}`
+        : isListening ? "● écoute en cours..."
+        : isSpeaking  ? "◈ Seraphim parle..."
         : isThinking  ? "◌ traitement..."
         : "cliquez pour parler";
 
@@ -608,11 +611,16 @@ export default function OrbScreen({
                     state={orbState}
                     theme={theme}
                     onClick={() => {
-                        if (!activeId) onNewConversation();
+                        if (!activeId) {
+                            handleNewConversation();
+                        } else {
+                            setView("chat");
+                        }
+                        setPanelOpen(true);
                         onVoiceToggle();
                     }}
                 />
-                <div className="orb-status">{statusText}</div>
+                <div className={`orb-status${voiceError ? " error" : ""}`}>{statusText}</div>
                 {isSpeaking && (
                     <button
                         className="mute-btn"

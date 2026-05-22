@@ -1428,7 +1428,15 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
     font-family: 'Share Tech Mono', monospace;
     text-align: center;
     min-height: 16px;
+    max-width: 320px;
+    white-space: pre-wrap;
+    word-break: break-word;
     transition: color 0.3s;
+}
+
+.orb-status.error {
+    color: #f87171;
+    letter-spacing: 0.5px;
 }
 
 .dot-row {

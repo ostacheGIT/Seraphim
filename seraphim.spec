@@ -154,12 +154,19 @@ exe = EXE(
     icon=str(ROOT / "seraphim-ui" / "src-tauri" / "icons" / "icon.ico"),
 )
 
+# UPX must NOT compress Python DLLs — causes "failed to load python DLL" on Windows
+_UPX_EXCLUDE = [
+    "python3*.dll",
+    "vcruntime140*.dll",
+    "MSVCP140*.dll",
+]
+
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=_UPX_EXCLUDE,
     name="seraphim-server",
 )

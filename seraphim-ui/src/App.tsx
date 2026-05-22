@@ -35,6 +35,7 @@ export default function App() {
     const {
         isListening,
         isSpeaking,
+        voiceError,
         toggleListening,
         speak,
         stopSpeaking,
@@ -124,9 +125,10 @@ export default function App() {
                 } else if (assistantMsgId !== null) {
                     updateMessage(assistantMsgId, accumulated, "done");
                 }
-                // Generate LLM title after first exchange (fire and forget)
+                // Generate LLM title after first exchange — pass text directly so the backend
+                // skips the DB lookup (faster), messages are already saved by this point.
                 if (isFirstExchange && currentSessionId) {
-                    generateSessionTitle(currentSessionId).then((title) => {
+                    generateSessionTitle(currentSessionId, trimmed ? trimmed : undefined).then((title) => {
                         if (title) updateConversationTitle(currentSessionId, title);
                     });
                 }
@@ -249,6 +251,7 @@ export default function App() {
             isListening={isListening}
             isThinking={isThinking}
             isSpeaking={isSpeaking}
+            voiceError={voiceError}
             onSend={sendMessage}
             onVoiceToggle={toggleListening}
             onStopSpeaking={stopSpeaking}

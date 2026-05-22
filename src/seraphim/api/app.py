@@ -2,6 +2,7 @@
 Seraphim API — FastAPI application.
 """
 
+import json
 import logging
 import os
 import uuid
@@ -761,6 +762,8 @@ async def chat_stream(req: ChatRequest):
                     vram_used_mb=inf.vram_used_mb if inf else 0.0,
                 )),
             )
+            # Fire-and-forget: auto-extract user facts from this exchange
+            asyncio.create_task(_extract_user_facts_background(req.query))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")
@@ -818,16 +821,29 @@ async def truncate_session_endpoint(session_id: str, req: TruncateRequest):
     return {"ok": True, "session_id": session_id, "kept": req.keep_count}
 
 
-@app.post("/memory/sessions/{session_id}/title")
-async def generate_session_title(session_id: str):
-    """Génère un titre court via LLM pour la session et le persiste."""
-    messages = await load_history(session_id, limit=4)
-    if not messages:
-        return {"title": session_id}
+class TitleRequest(BaseModel):
+    text: Optional[str] = None
 
-    context = "\n".join(
-        f"{m['role']}: {m['content'][:300]}" for m in messages[:2]
-    )
+
+@app.post("/memory/sessions/{session_id}/title")
+async def generate_session_title(session_id: str, req: TitleRequest | None = None):
+    """Génère un titre court via LLM pour la session et le persiste.
+
+    Si `text` est fourni dans le body, on l'utilise directement (pas de lecture DB),
+    ce qui permet d'appeler l'endpoint en parallèle du streaming principal.
+    """
+    text = req.text if req else None
+    fallback = text[:40] + ("..." if text and len(text) > 40 else "") if text else session_id
+
+    if text:
+        context = f"user: {text[:400]}"
+    else:
+        messages = await load_history(session_id, limit=4)
+        if not messages:
+            return {"title": session_id}
+        context = "\n".join(f"{m['role']}: {m['content'][:300]}" for m in messages[:2])
+        fallback = next((m["content"][:40] for m in messages if m["role"] == "user"), session_id)
+
     prompt = [{
         "role": "user",
         "content": (
@@ -853,11 +869,65 @@ async def generate_session_title(session_id: str):
 
     title = "".join(parts).strip().split("\n")[0].strip("\"'").strip()
     if not title or len(title) > 60:
-        first_user = next((m["content"] for m in messages if m["role"] == "user"), session_id)
-        title = first_user[:40] + ("..." if len(first_user) > 40 else "")
+        title = fallback
 
     await save_session_title(session_id, title)
     return {"title": title}
+
+
+# ─── Long-term memory: auto-extraction ───────────────────────────────────────
+
+_PERSONA_KEYWORDS = frozenset([
+    "je ", "j'ai", "j'aime", "j'habite", "je vis", "je suis", "je m'appelle",
+    "mon ", "ma ", "mes ", "moi,", "moi.", "moi ", "nous ", "notre ",
+    "i am", "i have", "i like", "i live", "i work", "i'm ", "my ", "i call",
+    "me llamo", "soy ", "vivo ", "tengo ", "mi ",
+])
+
+
+async def _extract_user_facts_background(query: str) -> None:
+    """Extract user facts from a message and persist them (fire-and-forget)."""
+    if len(query.strip()) < 20:
+        return
+    q_lower = query.lower()
+    if not any(kw in q_lower for kw in _PERSONA_KEYWORDS):
+        return
+
+    prompt = [{
+        "role": "user",
+        "content": (
+            "Tu es un extracteur de faits. Analyse ce message et extrait les faits CERTAINS "
+            "et EXPLICITES sur l'utilisateur (prénom, âge, ville, profession, hobby, etc.).\n"
+            "Réponds UNIQUEMENT avec un JSON {\"clé\": \"valeur\"} ou {} si rien à extraire.\n"
+            "N'invente rien. N'interprète pas. Extrait seulement ce qui est dit clairement.\n\n"
+            f"Message: {query[:600]}\n\nJSON:"
+        ),
+    }]
+
+    engine = get_engine()
+    try:
+        raw_parts: list[str] = []
+        if hasattr(engine, "stream_chat_api"):
+            async for chunk in engine.stream_chat_api(prompt):
+                raw_parts.append(chunk)
+                if sum(len(p) for p in raw_parts) > 400:
+                    break
+        else:
+            result = await engine.chat(prompt)
+            msgs = result.get("messages", [])
+            raw_parts = [msgs[-1].get("content", "") if msgs else ""]
+
+        raw = "".join(raw_parts).strip()
+        start, end = raw.find("{"), raw.rfind("}") + 1
+        if 0 <= start < end:
+            facts = json.loads(raw[start:end])
+            if isinstance(facts, dict):
+                for k, v in facts.items():
+                    if isinstance(k, str) and isinstance(v, (str, int, float)) and str(v).strip():
+                        await save_fact(k.strip(), str(v).strip())
+                        logger.debug("Auto-extracted fact: %s = %s", k, v)
+    except Exception as exc:
+        logger.debug("Fact extraction skipped: %s", exc)
 
 
 # ─── User Facts ──────────────────────────────────────────────────────────────

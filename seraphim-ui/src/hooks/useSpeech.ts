@@ -40,7 +40,7 @@ interface UseSpeechOptions {
     onError?: (msg: string) => void;
 }
 
-export type SpeechState = "idle" | "listening" | "speaking";
+export type SpeechState = "idle" | "listening" | "speaking" | "error";
 
 export function useSpeech({
                               lang = "fr-FR",
@@ -48,12 +48,20 @@ export function useSpeech({
                               onError,
                           }: UseSpeechOptions) {
     const [state, setState]   = useState<SpeechState>("idle");
+    const [voiceError, setVoiceError] = useState<string | null>(null);
     const recogRef            = useRef<ISpeechRecognition | null>(null);
     const audioCtxRef         = useRef<AudioContext | null>(null);
     const sourceRef           = useRef<AudioBufferSourceNode | null>(null);
     const queueRef            = useRef<string[]>([]);
     const isPlayingRef        = useRef<boolean>(false);
     const abortRef            = useRef<AbortController | null>(null);
+
+    // Always-fresh refs — avoids stale-closure bugs when activeId changes right
+    // before startListening() is called (e.g. orb click with no open conversation).
+    const onTranscriptRef = useRef(onTranscript);
+    const onErrorRef      = useRef(onError);
+    useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
+    useEffect(() => { onErrorRef.current      = onError;      }, [onError]);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -80,11 +88,19 @@ export function useSpeech({
         queueRef.current     = [];
         isPlayingRef.current = false;
         stopCurrentAudio();
-        setState("idle");
+        setVoiceError(null);
+
+        // Stop any previous recognition session before starting a new one
+        if (recogRef.current) {
+            try { recogRef.current.abort(); } catch (_) {}
+            recogRef.current = null;
+        }
 
         const SR = getSR();
         if (!SR) {
-            onError?.("SpeechRecognition non supporté. Utilise Chrome ou Edge.");
+            const msg = "SpeechRecognition non supporté. Utilise Chrome ou Edge.";
+            setVoiceError(msg);
+            onError?.(msg);
             return;
         }
 
@@ -94,13 +110,18 @@ export function useSpeech({
         recog.maxAlternatives = 1;
         recog.continuous      = false;
 
-        recog.onstart  = () => setState("listening");
+        recog.onstart  = () => { setVoiceError(null); setState("listening"); };
         recog.onresult = (e: ISpeechRecognitionEvent) => {
             const transcript = e.results[0][0].transcript.trim();
-            if (transcript) onTranscript(transcript);
+            if (transcript) onTranscriptRef.current(transcript);
         };
         recog.onerror  = (e: ISpeechRecognitionErrorEvent) => {
-            onError?.(e.error);
+            const msg = e.error === "not-allowed"
+                ? "Accès micro refusé — autorise le micro dans les paramètres Windows."
+                : e.error === "no-speech"
+                ? null
+                : e.error;
+            if (msg) { setVoiceError(msg); onErrorRef.current?.(msg); }
             setState("idle");
         };
         recog.onend    = () => {
@@ -108,8 +129,15 @@ export function useSpeech({
         };
 
         recogRef.current = recog;
-        recog.start();
-    }, [lang, onTranscript, onError, stopCurrentAudio]);
+        try {
+            recog.start();
+        } catch (err) {
+            const msg = `Impossible de démarrer la reconnaissance : ${(err as Error).message}`;
+            setVoiceError(msg);
+            onError?.(msg);
+            setState("idle");
+        }
+    }, [lang, stopCurrentAudio]);
 
     const stopListening   = useCallback(() => { recogRef.current?.stop(); setState("idle"); }, []);
     const toggleListening = useCallback(() => {
@@ -216,6 +244,7 @@ export function useSpeech({
         state,
         isListening:     state === "listening",
         isSpeaking:      state === "speaking",
+        voiceError,
         toggleListening,
         startListening,
         stopListening,
