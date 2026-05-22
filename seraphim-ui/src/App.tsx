@@ -50,6 +50,20 @@ export default function App() {
 
     speakRef.current = speak;
 
+    // Stable ref so the Tauri event listener never re-registers when state changes
+    const toggleListeningRef = useRef(toggleListening);
+    useEffect(() => { toggleListeningRef.current = toggleListening; }, [toggleListening]);
+
+    // Global Ctrl+Space shortcut emitted by Tauri Rust side
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        import("@tauri-apps/api/event")
+            .then(({ listen }) => listen("toggle-listening", () => toggleListeningRef.current()))
+            .then((fn) => { unlisten = fn; })
+            .catch(() => { /* not running in Tauri — ignore */ });
+        return () => { unlisten?.(); };
+    }, []);
+
     // Request desktop notification permission once
     useEffect(() => {
         if ("Notification" in window && Notification.permission === "default") {

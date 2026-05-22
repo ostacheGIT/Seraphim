@@ -3,6 +3,7 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 7272;
@@ -25,6 +26,7 @@ fn wait_for_backend(timeout_secs: u64) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Grant microphone permission for WebView2 — required for Web Speech API.
             // Windows system permission alone is not enough; WebView2 has its own layer that
@@ -125,6 +127,14 @@ pub fn run() {
                     let _ = app_handle.emit("backend-error", "Backend failed to start");
                 }
             });
+
+            // Register Ctrl+Space global shortcut → toggle listening
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+            app.handle().global_shortcut().on_shortcut(shortcut, |app_handle, _shortcut, event| {
+                if event.state() == ShortcutState::Pressed {
+                    let _ = app_handle.emit("toggle-listening", ());
+                }
+            })?;
 
             Ok(())
         })

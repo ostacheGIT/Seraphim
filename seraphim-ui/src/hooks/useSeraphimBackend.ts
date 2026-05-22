@@ -228,3 +228,21 @@ export async function resetRAG(): Promise<boolean> {
     return res.ok;
   } catch { return false; }
 }
+
+// ── Session search ────────────────────────────────────────────────────────────
+
+export interface SessionSummary {
+  session: string;
+  agent: string;
+  preview: string;
+  timestamp: string;
+}
+
+export async function searchSessions(query: string): Promise<SessionSummary[]> {
+  try {
+    const res = await fetch(`${BASE}/memory/search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return [];
+    const data = await res.json() as { sessions: SessionSummary[] };
+    return data.sessions ?? [];
+  } catch { return []; }
+}

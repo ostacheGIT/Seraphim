@@ -30,6 +30,7 @@ from seraphim.memory.store import (
     init_db,
     load_history,
     list_sessions,
+    search_sessions,
     delete_session,
     truncate_session,
     save_message,
@@ -787,18 +788,28 @@ async def submit_feedback(req: FeedbackRequest):
 
 # ─── Memory ──────────────────────────────────────────────────────────────────
 
-@app.get("/memory/sessions")
-async def get_sessions():
-    sessions = await list_sessions()
+def _fmt_sessions(sessions: list[dict]) -> list[dict]:
     return [
         {
             "session_id": s["session"],
-            "title": s["preview"] or s["session"],
-            "agent": s["agent"],
+            "title":      s["preview"] or s["session"],
+            "agent":      s["agent"],
             "updated_at": s["timestamp"],
         }
         for s in sessions
     ]
+
+
+@app.get("/memory/sessions")
+async def get_sessions():
+    return _fmt_sessions(await list_sessions())
+
+
+@app.get("/memory/search")
+async def search_memory(q: str = ""):
+    if not q.strip():
+        return _fmt_sessions(await list_sessions())
+    return _fmt_sessions(await search_sessions(q.strip()))
 
 
 @app.get("/memory/sessions/{session_id}")

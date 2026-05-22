@@ -1944,3 +1944,54 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
         font-size: 10px;
     }
 }
+
+/* ─── Search bar ─────────────────────────────────────────────── */
+.search-bar {
+    position: relative;
+    margin: 0 1rem 0.5rem;
+    display: flex;
+    align-items: center;
+}
+
+.search-input {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1px solid var(--input-bord);
+    border-radius: 8px;
+    padding: 6px 28px 6px 10px;
+    color: var(--text);
+    font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+    outline: none;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.search-input:focus {
+    border-color: var(--input-bord-focus);
+    background: var(--input-focus);
+}
+
+.search-input::placeholder {
+    color: var(--text-dim);
+}
+
+.search-clear {
+    position: absolute;
+    right: 7px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    padding: 0;
+    transition: color 0.15s;
+}
+
+.search-clear:hover { color: var(--text); }
+
+[data-theme="light"] .search-input {
+    background: rgba(255, 255, 255, 0.7);
+    border-color: rgba(0, 0, 0, 0.18);
+    color: var(--text);
+}

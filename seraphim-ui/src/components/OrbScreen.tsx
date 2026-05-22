@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -160,6 +160,8 @@ export default function OrbScreen({
     const [exportToast, setExportToast]   = useState<"ok" | "error" | null>(null);
     const exportToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const chatBottomRef = useRef<HTMLDivElement>(null);
+    const [searchQuery, setSearchQuery]   = useState("");
+    const [searchResults, setSearchResults] = useState<SessionSummary[]>([]);
 
     const refreshInstalledSkills = () => {
         fetchInstalledSkills().then((skills) => {
@@ -174,6 +176,14 @@ export default function OrbScreen({
     const refreshRagStatus = () => {
         getRagStatus().then((s) => setRagCount(s.doc_count));
     };
+
+    useEffect(() => {
+        if (!searchQuery.trim()) { setSearchResults([]); return; }
+        const t = setTimeout(() => {
+            searchSessions(searchQuery).then(setSearchResults);
+        }, 280);
+        return () => clearTimeout(t);
+    }, [searchQuery]);
 
     const triggerExport = (format: "markdown" | "json") => {
         if (!conversation) return;
@@ -407,31 +417,67 @@ export default function OrbScreen({
 
                 {/* Vue liste */}
                 {view === "list" && (
-                    <div className="conversation-list">
-                        {conversations.length === 0 && (
-                            <p className="empty-hint">Aucune conversation</p>
-                        )}
-                        {conversations.map((c) => (
-                            <div
-                                key={c.id}
-                                className={`conv-item ${activeId === c.id ? "active" : ""}`}
-                            >
-                                <button
-                                    className="conv-title"
-                                    onClick={() => handleSelectConversation(c.id)}
-                                >
-                                    {c.title}
-                                </button>
-                                <button
-                                    className="conv-delete"
-                                    onClick={(e) => { e.stopPropagation(); onDeleteConversation(c.id); }}
-                                    aria-label="Supprimer"
-                                >
-                                    <Trash2 size={12} />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
+                    <>
+                        <div className="search-bar">
+                            <input
+                                className="search-input"
+                                type="text"
+                                placeholder="Rechercher…"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                            />
+                            {searchQuery && (
+                                <button className="search-clear" onClick={() => setSearchQuery("")} aria-label="Effacer">✕</button>
+                            )}
+                        </div>
+                        <div className="conversation-list">
+                            {searchQuery.trim() ? (
+                                searchResults.length === 0 ? (
+                                    <p className="empty-hint">Aucun résultat</p>
+                                ) : (
+                                    searchResults.map((r) => (
+                                        <div
+                                            key={r.session}
+                                            className={`conv-item ${activeId === r.session ? "active" : ""}`}
+                                        >
+                                            <button
+                                                className="conv-title"
+                                                onClick={() => handleSelectConversation(r.session)}
+                                            >
+                                                {r.preview}
+                                            </button>
+                                        </div>
+                                    ))
+                                )
+                            ) : (
+                                <>
+                                    {conversations.length === 0 && (
+                                        <p className="empty-hint">Aucune conversation</p>
+                                    )}
+                                    {conversations.map((c) => (
+                                        <div
+                                            key={c.id}
+                                            className={`conv-item ${activeId === c.id ? "active" : ""}`}
+                                        >
+                                            <button
+                                                className="conv-title"
+                                                onClick={() => handleSelectConversation(c.id)}
+                                            >
+                                                {c.title}
+                                            </button>
+                                            <button
+                                                className="conv-delete"
+                                                onClick={(e) => { e.stopPropagation(); onDeleteConversation(c.id); }}
+                                                aria-label="Supprimer"
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </>
+                            )}
+                        </div>
+                    </>
                 )}
 
                 {/* Vue conversation */}

@@ -88,6 +88,45 @@ async def list_sessions() -> list[dict]:
     ]
 
 
+async def search_sessions(query: str) -> list[dict]:
+    """Recherche fulltext dans les titres et le contenu des messages."""
+    pattern = f"%{query}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT
+                c.session,
+                c.agent,
+                COALESCE(first_msg.title, first_msg.content) AS title,
+                c.timestamp AS updated_at
+            FROM conversations c
+            JOIN (
+                SELECT session, MAX(id) AS max_id FROM conversations GROUP BY session
+            ) mx ON mx.max_id = c.id
+            JOIN (
+                SELECT session, MIN(id) AS min_id
+                FROM conversations WHERE role = 'user' GROUP BY session
+            ) fm ON fm.session = c.session
+            JOIN conversations first_msg ON first_msg.id = fm.min_id
+            WHERE c.session IN (
+                SELECT DISTINCT session FROM conversations
+                WHERE lower(content) LIKE lower(?)
+                   OR lower(COALESCE(title, '')) LIKE lower(?)
+            )
+            ORDER BY c.timestamp DESC
+            LIMIT 60
+        """, (pattern, pattern)) as cursor:
+            rows = await cursor.fetchall()
+    return [
+        {
+            "session":   r[0],
+            "agent":     r[1],
+            "preview":   r[2][:80] if r[2] else r[0],
+            "timestamp": r[3],
+        }
+        for r in rows
+    ]
+
+
 async def save_session_title(session: str, title: str) -> None:
     """Sauvegarde un titre généré par LLM sur la première ligne user de la session."""
     async with aiosqlite.connect(DB_PATH) as db:
