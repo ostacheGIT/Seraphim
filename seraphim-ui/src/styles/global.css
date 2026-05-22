@@ -226,6 +226,23 @@
 [data-theme="light"] .section-label { color: var(--text-dim); }
 
 /* ─── Messages — thème clair ───────────────────────────────── */
+[data-theme="light"] .chat-msg {
+    border-bottom-color: rgba(0,0,0,0.06);
+}
+[data-theme="light"] .chat-msg.assistant {
+    background: rgba(255,255,255,0.55);
+}
+[data-theme="light"] .chat-msg.assistant .msg-role {
+    color: rgba(20,20,40,0.45);
+}
+[data-theme="light"] .chat-msg.user .msg-role {
+    color: rgba(20,20,40,0.38);
+}
+[data-theme="light"] .chat-msg.user .msg-content {
+    background: rgba(26,26,46,0.09);
+    border-color: rgba(26,26,46,0.14);
+}
+[data-theme="light"] .msg-streaming-text { color: var(--text); }
 [data-theme="light"] .msg-edit-btn  { color: rgba(20,20,40,0.25); }
 [data-theme="light"] .msg-edit-btn:hover { color: rgba(20,20,40,0.7); }
 [data-theme="light"] .msg-edit-textarea {
