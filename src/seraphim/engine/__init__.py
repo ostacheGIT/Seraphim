@@ -146,11 +146,92 @@ def get_engine(engine_id: Optional[str] = None) -> LLMEngine:
         raise KeyError(f"Unknown engine_id: {engine_id!r}")
 
 
-def list_available_engines() -> List[Dict[str, str]]:
-    """Return engine descriptors for the /engines API endpoint."""
+_EXTERNAL_DEFS = [
+    ("openai",  "OpenAI",  "gpt-4o-mini"),
+    ("mistral", "Mistral", "mistral-small"),
+    ("claude",  "Claude",  "claude-haiku"),
+]
+
+# Keys set at runtime (survive until server restart)
+_runtime_keys: Dict[str, str] = {}
+
+
+def list_available_engines() -> List[Dict]:
+    """Return engine descriptors — always includes external engines (configured or not)."""
     _ensure_initialized()
-    result = [{"id": "auto", "label": _ENGINE_LABELS["auto"]}]
-    for eid in ["ollama_qwen3b", "ollama_qwen7b", "openai", "mistral", "claude", "vllm", "llamacpp"]:
+    result: List[Dict] = [{"id": "auto", "label": _ENGINE_LABELS["auto"], "configured": True}]
+    for eid in ["ollama_qwen3b", "ollama_qwen7b"]:
         if eid in _engines:
-            result.append({"id": eid, "label": _ENGINE_LABELS.get(eid, eid)})
+            result.append({"id": eid, "label": _ENGINE_LABELS.get(eid, eid), "configured": True})
+    for eid, name, default_model in _EXTERNAL_DEFS:
+        configured = eid in _engines
+        label = _ENGINE_LABELS.get(eid, name) if configured else f"{name} · {default_model}"
+        result.append({"id": eid, "label": label, "configured": configured})
     return result
+
+
+def get_external_keys_status() -> Dict[str, bool]:
+    """Return which external engines have an API key set."""
+    from seraphim.settings import settings
+    ext = settings.external_api
+    return {
+        "openai":  bool(_runtime_keys.get("openai")  or ext.openai_key),
+        "mistral": bool(_runtime_keys.get("mistral") or ext.mistral_key),
+        "claude":  bool(_runtime_keys.get("claude")  or ext.claude_key),
+    }
+
+
+def update_external_key(engine_name: str, key: str) -> None:
+    """Set (or clear) an external API key at runtime and persist to config.yaml."""
+    import yaml
+    from pathlib import Path as _Path
+
+    # 1 — persist
+    config_path = _Path.home() / ".seraphim" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if config_path.exists():
+        try:
+            data = yaml.safe_load(config_path.read_text()) or {}
+        except Exception:
+            data = {}
+    data.setdefault("external_api", {})[f"{engine_name}_key"] = key
+    config_path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
+
+    # 2 — update runtime dict
+    _runtime_keys[engine_name] = key
+
+    # 3 — re-register (or unregister) the engine
+    from seraphim.settings import settings
+    ext = settings.external_api
+    from seraphim.engine.openai_compat import OpenAICompatEngine
+    from seraphim.engine.claude import ClaudeEngine
+
+    if engine_name == "openai":
+        if key:
+            _ENGINE_LABELS["openai"] = f"OpenAI · {ext.openai_model}"
+            register_engine("openai", OpenAICompatEngine(
+                model=ext.openai_model, api_key=key,
+                base_url=ext.openai_base_url, name="OpenAI", engine_id="openai",
+            ))
+        else:
+            _engines.pop("openai", None)
+
+    elif engine_name == "mistral":
+        if key:
+            _ENGINE_LABELS["mistral"] = f"Mistral · {ext.mistral_model}"
+            register_engine("mistral", OpenAICompatEngine(
+                model=ext.mistral_model, api_key=key,
+                base_url="https://api.mistral.ai", name="Mistral", engine_id="mistral",
+            ))
+        else:
+            _engines.pop("mistral", None)
+
+    elif engine_name == "claude":
+        if key:
+            _ENGINE_LABELS["claude"] = f"Claude · {ext.claude_model}"
+            register_engine("claude", ClaudeEngine(model=ext.claude_model, api_key=key))
+        else:
+            _engines.pop("claude", None)
+
+    logger.info("External engine '%s' %s", engine_name, "registered" if key else "unregistered")

@@ -3,6 +3,7 @@ const BASE = "http://localhost:7272";
 export interface EngineDescriptor {
   id: string;
   label: string;
+  configured?: boolean;
 }
 
 export async function fetchAvailableEngines(): Promise<EngineDescriptor[]> {
@@ -12,6 +13,26 @@ export async function fetchAvailableEngines(): Promise<EngineDescriptor[]> {
     const data = await res.json() as { engines: EngineDescriptor[] };
     return data.engines ?? _DEFAULT_ENGINES;
   } catch { return _DEFAULT_ENGINES; }
+}
+
+export async function getEngineKeyStatus(): Promise<Record<string, boolean>> {
+  try {
+    const res = await fetch(`${BASE}/engines/keys`);
+    if (!res.ok) return {};
+    const data = await res.json() as { keys: Record<string, boolean> };
+    return data.keys ?? {};
+  } catch { return {}; }
+}
+
+export async function setEngineKey(engine: string, key: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/engines/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engine, key }),
+    });
+    return res.ok;
+  } catch { return false; }
 }
 
 const _DEFAULT_ENGINES: EngineDescriptor[] = [

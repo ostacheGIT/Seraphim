@@ -395,9 +395,32 @@ async def list_models():
 
 @app.get("/engines")
 async def list_engines():
-    """Return all currently registered engines (Ollama + any configured external APIs)."""
+    """Return all engines (Ollama always present; external shown configured or not)."""
     from seraphim.engine import list_available_engines
     return {"engines": list_available_engines()}
+
+
+@app.get("/engines/keys")
+async def get_engine_keys():
+    """Return which external engines have an API key configured (never returns the key itself)."""
+    from seraphim.engine import get_external_keys_status
+    return {"keys": get_external_keys_status()}
+
+
+class EngineKeyRequest(BaseModel):
+    engine: str   # "openai" | "mistral" | "claude"
+    key: str      # empty string to remove the key
+
+
+@app.post("/engines/keys", dependencies=[Depends(_require_api_key)])
+async def set_engine_key(req: EngineKeyRequest):
+    """Save (or clear) an external API key and immediately register/unregister the engine."""
+    if req.engine not in ("openai", "mistral", "claude"):
+        raise HTTPException(status_code=400, detail=f"Unknown engine: {req.engine}")
+    from seraphim.engine import update_external_key
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: update_external_key(req.engine, req.key.strip()))
+    return {"ok": True, "engine": req.engine, "configured": bool(req.key.strip())}
 
 
 @app.get("/agents")

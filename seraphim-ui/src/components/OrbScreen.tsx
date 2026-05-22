@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor, getEngineKeyStatus, setEngineKey } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -163,10 +163,14 @@ export default function OrbScreen({
     const [searchQuery, setSearchQuery]   = useState("");
     const [searchResults, setSearchResults] = useState<SessionSummary[]>([]);
     const [availableEngines, setAvailableEngines] = useState<EngineDescriptor[]>([
-        { id: "auto",          label: "Auto · Routage intelligent" },
-        { id: "ollama_qwen3b", label: "Qwen 2.5 3B · Local rapide" },
-        { id: "ollama_qwen7b", label: "Qwen 2.5 7B · Local précis" },
+        { id: "auto",          label: "Auto · Routage intelligent",  configured: true },
+        { id: "ollama_qwen3b", label: "Qwen 2.5 3B · Local rapide",  configured: true },
+        { id: "ollama_qwen7b", label: "Qwen 2.5 7B · Local précis",  configured: true },
     ]);
+    const [apiKeysOpen, setApiKeysOpen]     = useState(false);
+    const [apiKeyInputs, setApiKeyInputs]   = useState<Record<string, string>>({ openai: "", mistral: "", claude: "" });
+    const [apiKeyStatus, setApiKeyStatus]   = useState<Record<string, boolean>>({});
+    const [apiKeySaving, setApiKeySaving]   = useState(false);
 
     const refreshInstalledSkills = () => {
         fetchInstalledSkills().then((skills) => {
@@ -203,6 +207,7 @@ export default function OrbScreen({
         refreshInstalledSkills();
         refreshRagStatus();
         fetchAvailableEngines().then(setAvailableEngines);
+        getEngineKeyStatus().then(setApiKeyStatus);
     }, []);
 
     const agents = [...BASE_AGENTS, ...installedSkillAgents];
@@ -377,7 +382,14 @@ export default function OrbScreen({
                 {/* Moteur + Agent */}
                 <div style={{ display: "flex", gap: "0.5rem", margin: "0.6rem 1rem" }}>
                     <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                        <span className="section-label">Moteur</span>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <span className="section-label">Moteur</span>
+                            <button
+                                className={`api-keys-toggle${apiKeysOpen ? " active" : ""}`}
+                                onClick={() => setApiKeysOpen((p) => !p)}
+                                title="Clés API externes"
+                            >⚙</button>
+                        </div>
                         <select
                             className="engine-select"
                             value={engineId}
@@ -385,7 +397,9 @@ export default function OrbScreen({
                             style={{ width: "100%" }}
                         >
                             {availableEngines.map((e) => (
-                                <option key={e.id} value={e.id}>{e.label}</option>
+                                <option key={e.id} value={e.id}>
+                                    {e.configured === false ? `○ ${e.label}` : e.label}
+                                </option>
                             ))}
                         </select>
                     </div>
@@ -403,6 +417,52 @@ export default function OrbScreen({
                         </select>
                     </div>
                 </div>
+
+                {/* Panneau clés API */}
+                {apiKeysOpen && (
+                    <div className="api-keys-panel">
+                        <div className="api-keys-title">Clés API externes</div>
+                        {(["openai", "mistral", "claude"] as const).map((eng) => (
+                            <div key={eng} className="api-key-row">
+                                <label className="api-key-label">
+                                    <span className={`api-key-dot${apiKeyStatus[eng] ? " set" : ""}`} />
+                                    {eng === "openai" ? "OpenAI" : eng === "mistral" ? "Mistral" : "Claude"}
+                                </label>
+                                <input
+                                    className="api-key-input"
+                                    type="password"
+                                    placeholder={apiKeyStatus[eng] ? "••••••• (défini)" : "sk-..."}
+                                    value={apiKeyInputs[eng]}
+                                    onChange={(e) => setApiKeyInputs((k) => ({ ...k, [eng]: e.target.value }))}
+                                    autoComplete="off"
+                                />
+                            </div>
+                        ))}
+                        <button
+                            className="api-keys-save"
+                            disabled={apiKeySaving}
+                            onClick={async () => {
+                                setApiKeySaving(true);
+                                const changed = (["openai", "mistral", "claude"] as const).filter(
+                                    (e) => apiKeyInputs[e] !== ""
+                                );
+                                await Promise.all(changed.map((e) => setEngineKey(e, apiKeyInputs[e])));
+                                // Reload engines + key status
+                                const [engines, keys] = await Promise.all([
+                                    fetchAvailableEngines(),
+                                    getEngineKeyStatus(),
+                                ]);
+                                setAvailableEngines(engines);
+                                setApiKeyStatus(keys);
+                                setApiKeyInputs({ openai: "", mistral: "", claude: "" });
+                                setApiKeySaving(false);
+                                setApiKeysOpen(false);
+                            }}
+                        >
+                            {apiKeySaving ? "Enregistrement…" : "Enregistrer"}
+                        </button>
+                    </div>
+                )}
 
                 {/* Base de connaissances (RAG) */}
                 <div className="rag-status-bar">
