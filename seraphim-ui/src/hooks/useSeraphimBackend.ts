@@ -34,21 +34,29 @@ export async function askSeraphim(
     agent: string = "react",
     image?: string,
     contextMessages?: { role: string; content: string }[],
+    signal?: AbortSignal,
 ): Promise<{ response: string; traceId: string | null }> {
-  const res = await fetch(`${BASE}/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query: message,
-      agent: agent,
-      model: engineId,
-      engine_id: engineId,
-      session_id: sessionId ?? null,
-      messages: contextMessages ?? [],
-      stream: true,
-      image: image ?? null,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: message,
+        agent: agent,
+        model: engineId,
+        engine_id: engineId,
+        session_id: sessionId ?? null,
+        messages: contextMessages ?? [],
+        stream: true,
+        image: image ?? null,
+      }),
+      signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return { response: "", traceId: null };
+    throw e;
+  }
 
   if (!res.ok) throw new Error(`Backend error: ${res.status}`);
 
@@ -60,7 +68,13 @@ export async function askSeraphim(
   let buffer = "";
 
   while (true) {
-    const { done, value } = await reader.read();
+    let done: boolean, value: Uint8Array | undefined;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") break;
+      throw e;
+    }
     if (done) {
       if (buffer.trim().length > 3) onSentence?.(buffer.trim());
       break;

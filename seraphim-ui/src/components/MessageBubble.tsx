@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Copy, Check, Terminal, Pencil } from "lucide-react";
+import { Copy, Check, Terminal, Pencil, Square } from "lucide-react";
 import { Message } from "../types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,6 +10,7 @@ import { sendFeedback } from "../hooks/useSeraphimBackend";
 interface MessageBubbleProps {
     message: Message;
     onEdit?: (messageId: string, newContent: string) => void;
+    onStop?: () => void;
 }
 
 function CodeBlock({ lang, content }: { lang: string; content: string }) {
@@ -116,7 +117,7 @@ const MD_COMPONENTS = {
     pre: ({ children }: React.ComponentPropsWithoutRef<"pre">) => <>{children}</>,
 };
 
-export default function MessageBubble({ message, onEdit }: MessageBubbleProps) {
+export default function MessageBubble({ message, onEdit, onStop }: MessageBubbleProps) {
     const isUser = message.role === "user";
     const [isEditing, setIsEditing] = useState(false);
     const [editText, setEditText] = useState(message.content);
@@ -149,6 +150,11 @@ export default function MessageBubble({ message, onEdit }: MessageBubbleProps) {
                 {isUser && onEdit && !isEditing && (
                     <button className="msg-edit-btn" onClick={handleEditStart} aria-label="Modifier">
                         <Pencil size={10} />
+                    </button>
+                )}
+                {!isUser && onStop && (
+                    <button className="msg-stop-btn" onClick={onStop} aria-label="Interrompre">
+                        <Square size={10} fill="currentColor" />
                     </button>
                 )}
             </div>

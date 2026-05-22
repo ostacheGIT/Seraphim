@@ -602,10 +602,26 @@ body:has(.catalog-resize-handle.dragging) {
 .chat-msg:hover .msg-edit-btn { opacity: 1; }
 .msg-edit-btn:hover { color: rgba(255,255,255,0.7); }
 
+.msg-stop-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 100, 100, 0.7);
+    cursor: pointer;
+    padding: 0;
+    transition: color 0.15s, transform 0.1s;
+    line-height: 1;
+}
+.msg-stop-btn:hover { color: rgba(255, 80, 80, 1); transform: scale(1.15); }
+
 .msg-edit-area {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    width: 100%;
+}
+
+.chat-msg.user .msg-edit-area {
+    min-width: 280px;
 }
 
 .msg-edit-textarea {
@@ -660,8 +676,25 @@ body:has(.catalog-resize-handle.dragging) {
 
 .msg-edit-send:hover { opacity: 0.85; }
 
+.chat-msg.user {
+    align-items: flex-end;
+    border-bottom: none;
+    display: flex;
+    flex-direction: column;
+    padding: 6px 16px;
+}
+
 .chat-msg.user .msg-role {
-    color: rgba(210,210,210,0.58);
+    color: rgba(210,210,210,0.45);
+    justify-content: flex-end;
+}
+
+.chat-msg.user .msg-content {
+    background: rgba(255,255,255,0.09);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px 12px 3px 12px;
+    max-width: 78%;
+    padding: 8px 12px;
 }
 
 .chat-msg.assistant .msg-role {

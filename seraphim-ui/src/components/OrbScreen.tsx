@@ -29,6 +29,7 @@ interface OrbScreenProps {
     pendingImage?: string | null;
     onImageChange?: (img: string | null) => void;
     onEditMessage?: (messageId: string, newContent: string) => void;
+    onStop?: () => void;
 }
 
 const BASE_AGENTS = [
@@ -63,6 +64,7 @@ export default function OrbScreen({
     pendingImage,
     onImageChange,
     onEditMessage,
+    onStop,
 }: OrbScreenProps) {
     const [panelOpen, setPanelOpen]       = useState(false);
     const [catalogOpen, setCatalogOpen]   = useState(false);
@@ -275,7 +277,12 @@ export default function OrbScreen({
                     <>
                         <div className="chat-messages">
                             {conversation?.messages.map((msg) => (
-                                <MessageBubble key={msg.id} message={msg} onEdit={onEditMessage} />
+                                <MessageBubble
+                                    key={msg.id}
+                                    message={msg}
+                                    onEdit={onEditMessage}
+                                    onStop={msg.status === "streaming" ? onStop : undefined}
+                                />
                             ))}
                             {isThinking && !conversation?.messages.some(m => m.status === "streaming") && (
                                 <div className="chat-msg assistant">

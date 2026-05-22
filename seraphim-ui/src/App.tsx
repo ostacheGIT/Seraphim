@@ -26,6 +26,7 @@ export default function App() {
     } = useConversation();
 
     const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
+    const abortRef = useRef<AbortController | null>(null);
 
     const {
         isListening,
@@ -50,6 +51,8 @@ export default function App() {
             setPendingImage(null);
             const imageDataUrl = imageSnapshot ? `data:image/png;base64,${imageSnapshot}` : undefined;
             addMessage(trimmed || "📎 Image", "user", undefined, undefined, imageDataUrl);
+            const abortCtrl = new AbortController();
+            abortRef.current = abortCtrl;
             setIsThinking(true);
             let assistantMsgId: string | null = null;
             let accumulated = "";
@@ -69,11 +72,17 @@ export default function App() {
                     engineId,
                     agentId,
                     imageSnapshot ?? undefined,
+                    undefined,
+                    abortCtrl.signal,
                 );
-                if (assistantMsgId === null) {
-                    addMessage(response, "assistant", "done", traceId ?? undefined);
-                } else {
-                    updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                if (response || assistantMsgId === null) {
+                    if (assistantMsgId === null) {
+                        if (response) addMessage(response, "assistant", "done", traceId ?? undefined);
+                    } else {
+                        updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                    }
+                } else if (assistantMsgId !== null) {
+                    updateMessage(assistantMsgId, accumulated, "done");
                 }
             } catch {
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
@@ -84,6 +93,7 @@ export default function App() {
                 }
                 await speakRef.current?.(errMsg);
             } finally {
+                abortRef.current = null;
                 setIsThinking(false);
             }
         },
@@ -108,6 +118,8 @@ export default function App() {
             replaceFromMessage(messageId, newContent);
             await truncateMessages(activeId, dbKeepCount);
 
+            const abortCtrl = new AbortController();
+            abortRef.current = abortCtrl;
             setIsThinking(true);
             let assistantMsgId: string | null = null;
             let accumulated = "";
@@ -128,11 +140,16 @@ export default function App() {
                     agentId,
                     undefined,
                     contextMessages,
+                    abortCtrl.signal,
                 );
-                if (assistantMsgId === null) {
-                    addMessage(response, "assistant", "done", traceId ?? undefined);
-                } else {
-                    updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                if (response || assistantMsgId === null) {
+                    if (assistantMsgId === null) {
+                        if (response) addMessage(response, "assistant", "done", traceId ?? undefined);
+                    } else {
+                        updateMessage(assistantMsgId, response, "done", traceId ?? undefined);
+                    }
+                } else if (assistantMsgId !== null) {
+                    updateMessage(assistantMsgId, accumulated, "done");
                 }
             } catch {
                 const errMsg = "Erreur : impossible de contacter le backend Seraphim.";
@@ -142,11 +159,16 @@ export default function App() {
                     updateMessage(assistantMsgId, errMsg, "error");
                 }
             } finally {
+                abortRef.current = null;
                 setIsThinking(false);
             }
         },
         [isThinking, active, activeId, replaceFromMessage, truncateMessages, addMessage, updateMessage, engineId, agentId],
     );
+
+    const stopGeneration = useCallback(() => {
+        abortRef.current?.abort();
+    }, []);
 
     async function handleSend() {
         await sendMessage(input);
@@ -165,6 +187,7 @@ export default function App() {
             onSend={handleSend}
             onVoiceToggle={toggleListening}
             onStopSpeaking={stopSpeaking}
+            onStop={stopGeneration}
             onSelectConversation={setActiveId}
             onNewConversation={newConversation}
             onDeleteConversation={deleteConversation}
