@@ -3,7 +3,7 @@ import { Conversation, Message } from "../types";
 
 const API = "http://localhost:7272";
 
-export type EngineId = "ollama_qwen3b" | "ollama_qwen7b";
+export type EngineId = string;
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 9);
@@ -12,7 +12,7 @@ function generateId(): string {
 export function useConversation() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [engineId, setEngineId] = useState<EngineId>("ollama_qwen3b");
+  const [engineId, setEngineId] = useState<EngineId>("auto");
 
   useEffect(() => {
     async function fetchSessions() {

@@ -1,8 +1,28 @@
 const BASE = "http://localhost:7272";
 
+export interface EngineDescriptor {
+  id: string;
+  label: string;
+}
+
+export async function fetchAvailableEngines(): Promise<EngineDescriptor[]> {
+  try {
+    const res = await fetch(`${BASE}/engines`);
+    if (!res.ok) return _DEFAULT_ENGINES;
+    const data = await res.json() as { engines: EngineDescriptor[] };
+    return data.engines ?? _DEFAULT_ENGINES;
+  } catch { return _DEFAULT_ENGINES; }
+}
+
+const _DEFAULT_ENGINES: EngineDescriptor[] = [
+  { id: "auto",          label: "Auto · Routage intelligent" },
+  { id: "ollama_qwen3b", label: "Qwen 2.5 3B · Local rapide" },
+  { id: "ollama_qwen7b", label: "Qwen 2.5 7B · Local précis" },
+];
+
 const SENTENCE_END = /[.!?;:\n]/;
 
-export type EngineId = "ollama_qwen3b" | "ollama_qwen7b";
+export type EngineId = string;
 
 export interface InstalledSkill {
   id: string;

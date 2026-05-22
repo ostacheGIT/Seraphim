@@ -5,6 +5,7 @@ Seraphim API — FastAPI application.
 import json
 import logging
 import os
+import re
 import tempfile
 import uuid
 import asyncio
@@ -132,7 +133,34 @@ def _maybe_start_daemon() -> None:
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 
-EngineId = Optional[Literal["ollama_qwen3b", "ollama_qwen7b", "vllm", "llamacpp"]]
+EngineId = Optional[Literal["auto", "ollama_qwen3b", "ollama_qwen7b", "openai", "mistral", "claude", "vllm", "llamacpp"]]
+
+# ─── Complexity-based auto-router (3B ↔ 7B) ──────────────────────────────────
+
+_COMPLEX_RE = re.compile(
+    r"\b("
+    # French
+    r"analys|expliqu|implement|débogu|refactoris|compar|différen|pourquoi|comment fonctionne|"
+    r"étape par étape|crée un|construis|conçoi|algorithme|optimis|résumé|traduis|génère|"
+    r"écris un|rédige|essay|rapport|thèse|argument|démontr|prouv|"
+    # English
+    r"analyze|analyz|explain|implement|debug|refactor|compar|difference|why|how does|"
+    r"step.by.step|write a|create a|build|design|architect|algorithm|optimiz|optimis|"
+    r"review|critique|essay|report|summari|translat|convert|formula|equation|calcul|"
+    r"proof|theorem|generate|draft"
+    r")\b",
+    re.IGNORECASE,
+)
+_AUTO_LONG_THRESHOLD = 120  # words above this → 7B
+
+
+def _complexity_route(query: str) -> str:
+    """Return the better engine_id for a given query."""
+    if len(query.split()) >= _AUTO_LONG_THRESHOLD:
+        return "ollama_qwen7b"
+    if _COMPLEX_RE.search(query):
+        return "ollama_qwen7b"
+    return "ollama_qwen3b"
 
 
 class ChatRequest(BaseModel):
@@ -339,9 +367,14 @@ async def health():
 async def engine_warmup(body: dict):
     """Pre-load a model into Ollama memory so the first real request is fast."""
     engine_id = body.get("engine_id", "ollama_qwen3b")
+    # "auto" resolves to 3B for warmup purposes
+    if engine_id == "auto":
+        engine_id = "ollama_qwen3b"
+    # Skip warmup for non-Ollama engines (cloud APIs don't need it)
+    if engine_id not in ("ollama_qwen3b", "ollama_qwen7b"):
+        return {"status": "skipped", "engine_id": engine_id}
     try:
         eng = get_engine(engine_id)
-        # Drain a minimal streaming request — Ollama loads the model into VRAM during this call
         async for _ in eng.stream_chat_api([{"role": "user", "content": "hi"}]):
             pass
         return {"status": "ready", "engine_id": engine_id}
@@ -358,6 +391,13 @@ async def list_models():
         ],
         "default": "ollama_qwen3b",
     }
+
+
+@app.get("/engines")
+async def list_engines():
+    """Return all currently registered engines (Ollama + any configured external APIs)."""
+    from seraphim.engine import list_available_engines
+    return {"engines": list_available_engines()}
 
 
 @app.get("/agents")
@@ -559,11 +599,11 @@ def _do_build_catalog() -> int:
 
 def _resolve_engine_id(req: ChatRequest) -> str:
     engine_id: str | None = req.engine_id
-    if engine_id is None and req.model:
-        if "7b" in req.model:
-            engine_id = "ollama_qwen7b"
+    if engine_id in (None, "auto"):
+        if req.model and not engine_id:
+            engine_id = "ollama_qwen7b" if "7b" in req.model else "ollama_qwen3b"
         else:
-            engine_id = "ollama_qwen3b"
+            engine_id = _complexity_route(req.query)
     return engine_id or "ollama_qwen3b"
 
 
@@ -718,7 +758,28 @@ async def chat_stream(req: ChatRequest):
     trace_id = str(uuid.uuid4())
 
     async def generator():
+        import httpx as _httpx
         result = ""
+        actual_engine_id = engine_id
+
+        async def _stream_primary() -> list[str]:
+            chunks: list[str] = []
+            async for chunk in ag.stream(effective_query, ctx):
+                chunks.append(chunk)
+                yield chunk
+
+        async def _stream_fallback(fb_engine_id: str) -> list[str]:
+            """Simple chat with the fallback external engine (no agent tools)."""
+            fb_eng = get_engine(fb_engine_id)
+            system_prompt = getattr(ag, "system_prompt", "")
+            msgs: list[dict] = []
+            if system_prompt:
+                msgs.append({"role": "system", "content": system_prompt})
+            msgs.extend(ctx.messages)
+            msgs.append({"role": "user", "content": effective_query})
+            async for chunk in fb_eng.stream_chat_api(msgs):
+                yield chunk
+
         try:
             if vision_unavailable:
                 result = _NO_VISION_MSG
@@ -740,14 +801,35 @@ async def chat_stream(req: ChatRequest):
                     async for chunk in ag.stream(effective_query, ctx):
                         chunks.append(chunk)
                         yield chunk
+                except (_httpx.ConnectError, ConnectionRefusedError, OSError) as exc:
+                    # Primary Ollama unreachable — try fallback if configured and no output yet
+                    from seraphim.settings import settings as _s
+                    fb = _s.external_api.fallback_engine if _s.external_api.fallback_enabled else ""
+                    if fb and not chunks:
+                        try:
+                            actual_engine_id = fb
+                            logger.warning("Ollama unavailable (%s) — falling back to %s", exc, fb)
+                            notice = f"[Ollama indisponible — réponse via {fb}]\n\n"
+                            yield notice
+                            chunks.append(notice)
+                            async for chunk in _stream_fallback(fb):
+                                chunks.append(chunk)
+                                yield chunk
+                        except Exception as fb_exc:
+                            err = f"\n⚠️ Fallback {fb} échoué : {fb_exc}"
+                            chunks.append(err)
+                            yield err
+                    else:
+                        error_chunk = f"\n⚠️ Moteur indisponible : {exc}"
+                        chunks.append(error_chunk)
+                        yield error_chunk
                 except Exception as exc:
                     error_chunk = f"\n⚠️ Erreur moteur LLM : {exc}"
                     chunks.append(error_chunk)
                     yield error_chunk
                 result = "".join(chunks)
         finally:
-            # Always save history and trace — even if the client disconnects mid-stream
-            inf = await _get_engine_metrics(engine_id)
+            inf = await _get_engine_metrics(actual_engine_id)
             await asyncio.gather(
                 save_message(session_id, "user", req.query, routed_agent),
                 save_message(session_id, "assistant", result, routed_agent),
@@ -765,15 +847,14 @@ async def chat_stream(req: ChatRequest):
                     vram_used_mb=inf.vram_used_mb if inf else 0.0,
                 )),
             )
-            # Fire-and-forget: auto-extract user facts from this exchange
             asyncio.create_task(_extract_user_facts_background(req.query))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")
-    response.headers["X-Session-Id"] = session_id
-    response.headers["X-Engine-Id"] = engine_id
+    response.headers["X-Session-Id"]  = session_id
+    response.headers["X-Engine-Id"]   = engine_id   # resolved engine (may be 3B or 7B when auto)
     response.headers["X-Routed-Agent"] = routed_agent
-    response.headers["X-Trace-Id"] = trace_id
+    response.headers["X-Trace-Id"]    = trace_id
     return response
 
 

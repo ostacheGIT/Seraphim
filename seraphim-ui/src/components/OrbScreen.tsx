@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -162,6 +162,11 @@ export default function OrbScreen({
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const [searchQuery, setSearchQuery]   = useState("");
     const [searchResults, setSearchResults] = useState<SessionSummary[]>([]);
+    const [availableEngines, setAvailableEngines] = useState<EngineDescriptor[]>([
+        { id: "auto",          label: "Auto · Routage intelligent" },
+        { id: "ollama_qwen3b", label: "Qwen 2.5 3B · Local rapide" },
+        { id: "ollama_qwen7b", label: "Qwen 2.5 7B · Local précis" },
+    ]);
 
     const refreshInstalledSkills = () => {
         fetchInstalledSkills().then((skills) => {
@@ -197,6 +202,7 @@ export default function OrbScreen({
     useEffect(() => {
         refreshInstalledSkills();
         refreshRagStatus();
+        fetchAvailableEngines().then(setAvailableEngines);
     }, []);
 
     const agents = [...BASE_AGENTS, ...installedSkillAgents];
@@ -375,11 +381,12 @@ export default function OrbScreen({
                         <select
                             className="engine-select"
                             value={engineId}
-                            onChange={(e) => onEngineChange(e.target.value as EngineId)}
+                            onChange={(e) => onEngineChange(e.target.value)}
                             style={{ width: "100%" }}
                         >
-                            <option value="ollama_qwen3b">Qwen 2.5 3B · Rapide</option>
-                            <option value="ollama_qwen7b">Qwen 2.5 7B · Précis</option>
+                            {availableEngines.map((e) => (
+                                <option key={e.id} value={e.id}>{e.label}</option>
+                            ))}
                         </select>
                     </div>
                     <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.4rem" }}>

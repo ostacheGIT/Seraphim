@@ -33,11 +33,24 @@ class MemorySettings(BaseModel):
 class AgentsSettings(BaseModel):
     default: str = "chat"
 
+class ExternalApiSettings(BaseModel):
+    openai_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.openai.com"
+    mistral_key: str = ""
+    mistral_model: str = "mistral-small-latest"
+    claude_key: str = ""
+    claude_model: str = "claude-haiku-4-5-20251001"
+    # Automatic fallback: if Ollama is unreachable, use this external engine
+    fallback_enabled: bool = False
+    fallback_engine: str = ""  # "openai" | "mistral" | "claude"
+
 class Settings(BaseSettings):
     engine: EngineSettings = EngineSettings()
     server: ServerSettings = ServerSettings()
     memory: MemorySettings = MemorySettings()
     agents: AgentsSettings = AgentsSettings()
+    external_api: ExternalApiSettings = ExternalApiSettings()
     log_level: str = "INFO"
     model_config = {"env_prefix": "SERAPHIM_", "env_nested_delimiter": "__"}
 
