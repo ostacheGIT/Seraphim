@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor, getEngineKeyStatus, setEngineKey } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, fetchNativeSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor, getEngineKeyStatus, setEngineKey } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -53,6 +53,9 @@ const BASE_AGENTS = [
     { id: "skill:web_search",       label: "🌐 Web Search" },
     { id: "skill:code_interpreter", label: "🐍 Code" },
     { id: "skill:think",            label: "🧠 Raisonnement" },
+    { id: "skill:pdf_reader",       label: "📄 PDF Reader" },
+    { id: "skill:meeting_notes",    label: "🎙️ Notes réunion" },
+    { id: "skill:csv_analyst",      label: "📊 CSV Analyst" },
 ];
 
 const MAX_FILE_CHARS = 24_000; // ~6 000 tokens — fits comfortably in 8192 num_ctx
@@ -173,12 +176,19 @@ export default function OrbScreen({
     const [apiKeySaving, setApiKeySaving]   = useState(false);
 
     const refreshInstalledSkills = () => {
-        fetchInstalledSkills().then((skills) => {
-            const baseIds = new Set(BASE_AGENTS.map((a) => a.id));
-            const extra = skills
-                .filter((s) => !baseIds.has(s.id))
-                .map((s) => ({ id: s.id, label: `🔧 ${s.name}` }));
-            setInstalledSkillAgents(extra);
+        const baseIds = new Set(BASE_AGENTS.map((a) => a.id));
+        Promise.all([fetchInstalledSkills(), fetchNativeSkills()]).then(([installed, native]) => {
+            const extra = [
+                ...native
+                    .filter((s) => !baseIds.has(s.id))
+                    .map((s) => ({ id: s.id, label: `🔧 ${s.name}` })),
+                ...installed
+                    .filter((s) => !baseIds.has(s.id))
+                    .map((s) => ({ id: s.id, label: `🔧 ${s.name}` })),
+            ];
+            // Deduplicate by id
+            const seen = new Set<string>();
+            setInstalledSkillAgents(extra.filter((a) => seen.has(a.id) ? false : (seen.add(a.id), true)));
         });
     };
 
