@@ -177,6 +177,7 @@ export default function OrbScreen({
     const [learningStatus, setLearningStatus] = useState<LearningStatus>({ running: false });
     const [learningMetrics, setLearningMetrics] = useState<LearningMetrics>({ total_traces: 0, good_traces: 0, sft_pairs: 0, accepted_overlays: 0, total_tokens_out: 0, overlay_runs: 0 });
     const [learningTriggering, setLearningTriggering] = useState(false);
+    const [learningOpen, setLearningOpen] = useState(false);
     const learningPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const refreshInstalledSkills = () => {
@@ -520,62 +521,66 @@ export default function OrbScreen({
 
                 {/* Apprentissage automatique */}
                 <div className="learning-panel">
-                    <div className="learning-header">
+                    <button className="learning-collapse-btn" onClick={() => setLearningOpen(p => !p)}>
                         <span className={`learning-dot${learningStatus.running ? " active" : ""}`} />
                         <span className="learning-title">Apprentissage</span>
                         <span className="learning-status-label">
                             {learningStatus.status === "training"
-                                ? "⟳ apprentissage…"
+                                ? "⟳ en cours…"
                                 : learningStatus.running
-                                    ? `actif · run #${learningStatus.run_count ?? 0}`
+                                    ? `actif · #${learningStatus.run_count ?? 0}`
                                     : "inactif"}
                         </span>
-                        <button
-                            className={`learning-daemon-btn${learningStatus.running ? " stop" : ""}`}
-                            title={learningStatus.running ? "Arrêter le daemon" : "Démarrer le daemon"}
-                            onClick={async () => {
-                                if (learningStatus.running) {
-                                    await stopLearningDaemon();
-                                } else {
-                                    await startLearningDaemon();
-                                }
-                                setTimeout(refreshLearning, 800);
-                            }}
-                        >
-                            {learningStatus.running ? "■" : "▶"}
-                        </button>
-                    </div>
-                    <div className="learning-stats">
-                        <span title="Traces collectées">{learningMetrics.total_traces} traces</span>
-                        <span className="learning-sep">·</span>
-                        <span title="Paires SFT générées">{learningMetrics.sft_pairs} paires</span>
-                        <span className="learning-sep">·</span>
-                        <span title="Overlays de prompt acceptés">{learningMetrics.accepted_overlays} overlays</span>
-                    </div>
-                    {learningStatus.last_result && !learningStatus.last_result.error && (
-                        <div className="learning-last-run">
-                            Dernier run : +{learningStatus.last_result.mined ?? 0} extraits,{" "}
-                            {learningStatus.last_result.accepted ?? 0} acceptés
-                        </div>
-                    )}
-                    {learningStatus.last_result?.error && (
-                        <div className="learning-last-run error">
-                            Erreur : {learningStatus.last_result.error}
-                        </div>
-                    )}
-                    <button
-                        className="learning-trigger-btn"
-                        disabled={learningTriggering || learningStatus.status === "training"}
-                        onClick={async () => {
-                            setLearningTriggering(true);
-                            await triggerLearning();
-                            startFastLearningPoll();
-                        }}
-                    >
-                        {(learningTriggering || learningStatus.status === "training")
-                            ? "⟳ apprentissage en cours…"
-                            : "Lancer maintenant"}
+                        <span className="learning-chevron">{learningOpen ? "▲" : "▼"}</span>
                     </button>
+                    {learningOpen && (
+                        <>
+                            <div className="learning-stats">
+                                <span title="Traces collectées">{learningMetrics.total_traces} traces</span>
+                                <span className="learning-sep">·</span>
+                                <span title="Paires SFT générées">{learningMetrics.sft_pairs} paires</span>
+                                <span className="learning-sep">·</span>
+                                <span title="Overlays acceptés">{learningMetrics.accepted_overlays} overlays</span>
+                            </div>
+                            {learningStatus.last_result && !learningStatus.last_result.error && (
+                                <div className="learning-last-run">
+                                    Dernier run : +{learningStatus.last_result.mined ?? 0} extraits,{" "}
+                                    {learningStatus.last_result.accepted ?? 0} acceptés
+                                </div>
+                            )}
+                            {learningStatus.last_result?.error && (
+                                <div className="learning-last-run error">
+                                    Erreur : {learningStatus.last_result.error}
+                                </div>
+                            )}
+                            <div className="learning-actions">
+                                <button
+                                    className="learning-trigger-btn"
+                                    disabled={learningTriggering || learningStatus.status === "training"}
+                                    onClick={async () => {
+                                        setLearningTriggering(true);
+                                        await triggerLearning();
+                                        startFastLearningPoll();
+                                    }}
+                                >
+                                    {(learningTriggering || learningStatus.status === "training")
+                                        ? "⟳ en cours…"
+                                        : "Lancer maintenant"}
+                                </button>
+                                <button
+                                    className={`learning-daemon-btn${learningStatus.running ? " stop" : ""}`}
+                                    title={learningStatus.running ? "Arrêter le daemon" : "Démarrer le daemon"}
+                                    onClick={async () => {
+                                        if (learningStatus.running) await stopLearningDaemon();
+                                        else await startLearningDaemon();
+                                        setTimeout(refreshLearning, 800);
+                                    }}
+                                >
+                                    {learningStatus.running ? "■ Stop" : "▶ Start"}
+                                </button>
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 {/* Vue liste */}
