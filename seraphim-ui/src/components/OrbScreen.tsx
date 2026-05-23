@@ -7,7 +7,7 @@ import type { Theme } from "../hooks/useTheme";
 import MessageBubble from "./MessageBubble";
 import SphereGL from "./SphereGL";
 import SkillCatalogPanel from "./SkillCatalogPanel";
-import { fetchInstalledSkills, fetchNativeSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor, getEngineKeyStatus, setEngineKey } from "../hooks/useSeraphimBackend";
+import { fetchInstalledSkills, fetchNativeSkills, getRagStatus, ingestToRAG, resetRAG, searchSessions, SessionSummary, fetchAvailableEngines, EngineDescriptor, getEngineKeyStatus, setEngineKey, getLearningStatus, getLearningMetrics, triggerLearning, startLearningDaemon, stopLearningDaemon, LearningStatus, LearningMetrics } from "../hooks/useSeraphimBackend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -174,6 +174,10 @@ export default function OrbScreen({
     const [apiKeyInputs, setApiKeyInputs]   = useState<Record<string, string>>({ openai: "", mistral: "", claude: "" });
     const [apiKeyStatus, setApiKeyStatus]   = useState<Record<string, boolean>>({});
     const [apiKeySaving, setApiKeySaving]   = useState(false);
+    const [learningStatus, setLearningStatus] = useState<LearningStatus>({ running: false });
+    const [learningMetrics, setLearningMetrics] = useState<LearningMetrics>({ total_traces: 0, good_traces: 0, sft_pairs: 0, accepted_overlays: 0, total_tokens_out: 0, overlay_runs: 0 });
+    const [learningTriggering, setLearningTriggering] = useState(false);
+    const learningPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const refreshInstalledSkills = () => {
         const baseIds = new Set(BASE_AGENTS.map((a) => a.id));
@@ -196,6 +200,11 @@ export default function OrbScreen({
         getRagStatus().then((s) => setRagCount(s.doc_count));
     };
 
+    const refreshLearning = () => {
+        getLearningStatus().then(setLearningStatus);
+        getLearningMetrics().then(setLearningMetrics);
+    };
+
     useEffect(() => {
         if (!searchQuery.trim()) { setSearchResults([]); return; }
         const t = setTimeout(() => {
@@ -213,11 +222,28 @@ export default function OrbScreen({
         exportToastTimer.current = setTimeout(() => setExportToast(null), 2500);
     };
 
+    const startFastLearningPoll = () => {
+        if (learningPollRef.current) return;
+        learningPollRef.current = setInterval(async () => {
+            const status = await getLearningStatus();
+            setLearningStatus(status);
+            if (status.status !== "training") {
+                // Done — stop fast poll, refresh metrics, clear triggering flag
+                if (learningPollRef.current) { clearInterval(learningPollRef.current); learningPollRef.current = null; }
+                getLearningMetrics().then(setLearningMetrics);
+                setLearningTriggering(false);
+            }
+        }, 2_000);
+    };
+
     useEffect(() => {
         refreshInstalledSkills();
         refreshRagStatus();
+        refreshLearning();
         fetchAvailableEngines().then(setAvailableEngines);
         getEngineKeyStatus().then(setApiKeyStatus);
+        const learningInterval = setInterval(refreshLearning, 30_000);
+        return () => { clearInterval(learningInterval); if (learningPollRef.current) clearInterval(learningPollRef.current); };
     }, []);
 
     const agents = [...BASE_AGENTS, ...installedSkillAgents];
@@ -489,6 +515,66 @@ export default function OrbScreen({
                         }}
                     >
                         Vider
+                    </button>
+                </div>
+
+                {/* Apprentissage automatique */}
+                <div className="learning-panel">
+                    <div className="learning-header">
+                        <span className={`learning-dot${learningStatus.running ? " active" : ""}`} />
+                        <span className="learning-title">Apprentissage</span>
+                        <span className="learning-status-label">
+                            {learningStatus.status === "training"
+                                ? "⟳ apprentissage…"
+                                : learningStatus.running
+                                    ? `actif · run #${learningStatus.run_count ?? 0}`
+                                    : "inactif"}
+                        </span>
+                        <button
+                            className={`learning-daemon-btn${learningStatus.running ? " stop" : ""}`}
+                            title={learningStatus.running ? "Arrêter le daemon" : "Démarrer le daemon"}
+                            onClick={async () => {
+                                if (learningStatus.running) {
+                                    await stopLearningDaemon();
+                                } else {
+                                    await startLearningDaemon();
+                                }
+                                setTimeout(refreshLearning, 800);
+                            }}
+                        >
+                            {learningStatus.running ? "■" : "▶"}
+                        </button>
+                    </div>
+                    <div className="learning-stats">
+                        <span title="Traces collectées">{learningMetrics.total_traces} traces</span>
+                        <span className="learning-sep">·</span>
+                        <span title="Paires SFT générées">{learningMetrics.sft_pairs} paires</span>
+                        <span className="learning-sep">·</span>
+                        <span title="Overlays de prompt acceptés">{learningMetrics.accepted_overlays} overlays</span>
+                    </div>
+                    {learningStatus.last_result && !learningStatus.last_result.error && (
+                        <div className="learning-last-run">
+                            Dernier run : +{learningStatus.last_result.mined ?? 0} extraits,{" "}
+                            {learningStatus.last_result.accepted ?? 0} acceptés
+                        </div>
+                    )}
+                    {learningStatus.last_result?.error && (
+                        <div className="learning-last-run error">
+                            Erreur : {learningStatus.last_result.error}
+                        </div>
+                    )}
+                    <button
+                        className="learning-trigger-btn"
+                        disabled={learningTriggering || learningStatus.status === "training"}
+                        onClick={async () => {
+                            setLearningTriggering(true);
+                            await triggerLearning();
+                            startFastLearningPoll();
+                        }}
+                    >
+                        {(learningTriggering || learningStatus.status === "training")
+                            ? "⟳ apprentissage en cours…"
+                            : "Lancer maintenant"}
                     </button>
                 </div>
 

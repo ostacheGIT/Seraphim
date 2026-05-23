@@ -1906,6 +1906,131 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
     border-color: rgba(30, 100, 200, 0.3);
 }
 
+/* ─── Learning panel ────────────────────────────────────────── */
+.learning-panel {
+    margin: 0 1rem 0.5rem;
+    padding: 0.55rem 0.7rem;
+    background: rgba(79, 152, 163, 0.06);
+    border: 1px solid rgba(79, 152, 163, 0.18);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.learning-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.learning-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-text-faint, #5a5957);
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+
+.learning-dot.active {
+    background: #4ade80;
+    box-shadow: 0 0 5px rgba(74, 222, 128, 0.5);
+    animation: pulse-learning 2s ease-in-out infinite;
+}
+
+@keyframes pulse-learning {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.learning-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted, #797876);
+    font-weight: 600;
+}
+
+.learning-status-label {
+    flex: 1;
+    font-size: 0.68rem;
+    color: var(--color-text-faint, #5a5957);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.learning-daemon-btn {
+    background: none;
+    border: 1px solid var(--color-border, #393836);
+    border-radius: 0.25rem;
+    color: var(--color-text-muted, #797876);
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.learning-daemon-btn:hover {
+    color: #4ade80;
+    border-color: #4ade80;
+}
+
+.learning-daemon-btn.stop:hover {
+    color: #f87171;
+    border-color: #f87171;
+}
+
+.learning-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.7rem;
+    color: var(--color-text-muted, #797876);
+}
+
+.learning-sep {
+    opacity: 0.4;
+}
+
+.learning-last-run {
+    font-size: 0.67rem;
+    color: var(--color-text-faint, #5a5957);
+}
+
+.learning-last-run.error {
+    color: #f87171;
+}
+
+.learning-trigger-btn {
+    margin-top: 0.15rem;
+    background: rgba(79, 152, 163, 0.1);
+    border: 1px solid rgba(79, 152, 163, 0.3);
+    border-radius: 0.35rem;
+    color: var(--color-primary, #4f98a3);
+    font-size: 0.7rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    width: 100%;
+    transition: background 0.2s;
+}
+
+.learning-trigger-btn:hover:not(:disabled) {
+    background: rgba(79, 152, 163, 0.2);
+}
+
+.learning-trigger-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+[data-theme="light"] .learning-panel {
+    background: rgba(79, 152, 163, 0.04);
+    border-color: rgba(79, 152, 163, 0.15);
+}
+
 /* ─── Responsive ────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .orb-stage.shifted {

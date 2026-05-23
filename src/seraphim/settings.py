@@ -33,6 +33,14 @@ class MemorySettings(BaseModel):
 class AgentsSettings(BaseModel):
     default: str = "chat"
 
+class LearningSettings(BaseModel):
+    auto_start: bool = False
+    interval_hours: float = 6.0
+    min_new_traces: int = 3
+    min_quality: float = 0.6
+    run_grpo: bool = False
+    run_finetune: bool = False
+
 class ExternalApiSettings(BaseModel):
     openai_key: str = ""
     openai_model: str = "gpt-4o-mini"
@@ -50,6 +58,7 @@ class Settings(BaseSettings):
     server: ServerSettings = ServerSettings()
     memory: MemorySettings = MemorySettings()
     agents: AgentsSettings = AgentsSettings()
+    learning: LearningSettings = LearningSettings()
     external_api: ExternalApiSettings = ExternalApiSettings()
     log_level: str = "INFO"
     model_config = {"env_prefix": "SERAPHIM_", "env_nested_delimiter": "__"}

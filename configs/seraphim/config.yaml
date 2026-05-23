@@ -25,6 +25,14 @@ engine:
   vllm_gpu_memory_utilization: 0.85
   vllm_max_model_len: 4096
 
+learning:
+  auto_start: true
+  interval_hours: 6.0
+  min_new_traces: 3
+  min_quality: 0.6
+  run_grpo: false
+  run_finetune: false
+
 log_level: INFO
 memory:
   backend: sqlite

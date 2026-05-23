@@ -97,6 +97,29 @@ def _maybe_start_daemon() -> None:
     from pathlib import Path
     from seraphim.learning.daemon import CONFIG_FILE, PID_FILE, is_alive
 
+    lc = settings.learning
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    if CONFIG_FILE.exists():
+        try:
+            existing = json.loads(CONFIG_FILE.read_text())
+            # Sync auto_start from YAML if YAML says true but file says false
+            if lc.auto_start and not existing.get("auto_start"):
+                existing["auto_start"] = True
+                CONFIG_FILE.write_text(json.dumps(existing, indent=2))
+        except Exception:
+            pass
+    elif lc.auto_start:
+        CONFIG_FILE.write_text(json.dumps({
+            "auto_start": True,
+            "interval_hours": lc.interval_hours,
+            "min_new_traces": lc.min_new_traces,
+            "min_quality": lc.min_quality,
+            "run_grpo": lc.run_grpo,
+            "run_finetune": lc.run_finetune,
+            "agents": "react,chat",
+        }, indent=2))
+
     if not CONFIG_FILE.exists():
         return
     try:
@@ -999,6 +1022,91 @@ async def chat_stream(req: ChatRequest, request: Request):
 async def submit_feedback(req: FeedbackRequest):
     score = max(0.0, min(1.0, req.score))
     await set_feedback(req.trace_id, score)
+    return {"ok": True}
+
+
+# ─── Learning ────────────────────────────────────────────────────────────────
+
+@app.get("/learning/status")
+async def learning_status():
+    from seraphim.learning.daemon import read_state, PID_FILE, is_alive
+    state = read_state()
+    pid = state.get("pid")
+    running = False
+    if pid:
+        try:
+            running = is_alive(int(pid))
+        except Exception:
+            pass
+    return {"running": running, **state}
+
+
+@app.get("/learning/metrics")
+async def learning_metrics():
+    from seraphim.learning.trace_store import trace_stats
+    return await trace_stats()
+
+
+@app.post("/learning/trigger", dependencies=[Depends(_require_api_key)])
+async def learning_trigger():
+    """Trigger a learning run in the background. Writes progress to daemon state file."""
+    import asyncio
+    import datetime
+    from seraphim.learning.orchestrator import LearningConfig, run_learning_loop
+    from seraphim.learning.daemon import read_state, _write_state
+
+    async def _run():
+        state = read_state()
+        state["status"] = "training"
+        state["last_run"] = datetime.datetime.now().isoformat()
+        _write_state(state)
+        try:
+            result = await run_learning_loop(LearningConfig())
+            last_result = {
+                "at": datetime.datetime.now().isoformat(),
+                "mined": result.mined_pairs,
+                "accepted": result.accepted,
+                "rejected": result.rejected,
+                "grpo_pairs": result.grpo_result.get("pairs_saved", 0) if result.grpo_result else 0,
+                "error": None,
+            }
+        except Exception as exc:
+            logger.error("Learning trigger failed: %s", exc)
+            last_result = {"at": datetime.datetime.now().isoformat(), "error": str(exc)}
+
+        state = read_state()
+        state["status"] = "idle"
+        state["last_result"] = last_result
+        _write_state(state)
+
+    asyncio.create_task(_run())
+    return {"ok": True, "running": True}
+
+
+@app.post("/learning/daemon/start", dependencies=[Depends(_require_api_key)])
+async def learning_daemon_start():
+    _maybe_start_daemon()
+    return {"ok": True}
+
+
+@app.post("/learning/daemon/stop", dependencies=[Depends(_require_api_key)])
+async def learning_daemon_stop():
+    import sys
+    from seraphim.learning.daemon import PID_FILE, is_alive
+    if not PID_FILE.exists():
+        return {"ok": True}
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        if is_alive(pid):
+            if sys.platform == "win32":
+                import subprocess
+                subprocess.call(["taskkill", "/F", "/PID", str(pid)], stdout=-1, stderr=-1)
+            else:
+                import os, signal as _signal
+                os.kill(pid, _signal.SIGTERM)
+        PID_FILE.unlink(missing_ok=True)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
     return {"ok": True}
 
 

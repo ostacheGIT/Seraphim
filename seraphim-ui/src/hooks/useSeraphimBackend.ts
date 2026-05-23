@@ -52,6 +52,70 @@ export interface InstalledSkill {
   description: string;
 }
 
+export interface LearningStatus {
+  running: boolean;
+  pid?: number;
+  started_at?: string;
+  status?: string;
+  run_count?: number;
+  last_run?: string;
+  next_run?: string;
+  last_result?: {
+    at?: string;
+    mined?: number;
+    accepted?: number;
+    rejected?: number;
+    grpo_pairs?: number;
+    error?: string | null;
+  };
+}
+
+export interface LearningMetrics {
+  total_traces: number;
+  good_traces: number;
+  sft_pairs: number;
+  accepted_overlays: number;
+  total_tokens_out: number;
+  overlay_runs: number;
+}
+
+export async function getLearningStatus(): Promise<LearningStatus> {
+  try {
+    const res = await fetch(`${BASE}/learning/status`);
+    if (!res.ok) return { running: false };
+    return await res.json() as LearningStatus;
+  } catch { return { running: false }; }
+}
+
+export async function getLearningMetrics(): Promise<LearningMetrics> {
+  try {
+    const res = await fetch(`${BASE}/learning/metrics`);
+    if (!res.ok) return { total_traces: 0, good_traces: 0, sft_pairs: 0, accepted_overlays: 0, total_tokens_out: 0, overlay_runs: 0 };
+    return await res.json() as LearningMetrics;
+  } catch { return { total_traces: 0, good_traces: 0, sft_pairs: 0, accepted_overlays: 0, total_tokens_out: 0, overlay_runs: 0 }; }
+}
+
+export async function triggerLearning(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/learning/trigger`, { method: "POST" });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function startLearningDaemon(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/learning/daemon/start`, { method: "POST" });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function stopLearningDaemon(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/learning/daemon/stop`, { method: "POST" });
+    return res.ok;
+  } catch { return false; }
+}
+
 export async function fetchInstalledSkills(): Promise<InstalledSkill[]> {
   const res = await fetch(`${BASE}/skills`);
   if (!res.ok) return [];

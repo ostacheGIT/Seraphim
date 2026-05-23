@@ -93,28 +93,31 @@ async def _daemon_loop(config: dict) -> None:
     )
 
     stats0 = await trace_stats()
-    last_total = stats0["total_traces"]
+    # Treat existing traces as "new" on startup so the first run triggers immediately
+    # (if there are at least min_new_traces already accumulated)
+    last_total = max(0, stats0["total_traces"] - min_new_traces)
 
     while True:
-        next_run_dt = datetime.now() + timedelta(seconds=interval_secs)
-        _write_state({
-            "pid": pid,
-            "started_at": started_at,
-            "status": "sleeping",
-            "run_count": run_count,
-            "last_run": last_result.get("at"),
-            "next_run": next_run_dt.isoformat(),
-            "last_result": last_result,
-            "config": config,
-        })
-
-        log.info("Sleeping until %s", next_run_dt.strftime("%Y-%m-%d %H:%M:%S"))
-        await asyncio.sleep(interval_secs)
-
         stats = await trace_stats()
         new_traces = stats["total_traces"] - last_total
+
         if new_traces < min_new_traces:
-            log.info("Only %d new traces (need %d) — skipping", new_traces, min_new_traces)
+            next_run_dt = datetime.now() + timedelta(seconds=interval_secs)
+            _write_state({
+                "pid": pid,
+                "started_at": started_at,
+                "status": "sleeping",
+                "run_count": run_count,
+                "last_run": last_result.get("at"),
+                "next_run": next_run_dt.isoformat(),
+                "last_result": last_result,
+                "config": config,
+            })
+            log.info(
+                "Only %d new traces (need %d) — sleeping until %s",
+                new_traces, min_new_traces, next_run_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            await asyncio.sleep(interval_secs)
             continue
 
         last_total = stats["total_traces"]
@@ -165,6 +168,21 @@ async def _daemon_loop(config: dict) -> None:
         except Exception as exc:
             log.exception("Run #%d failed: %s", run_count, exc)
             last_result = {"at": datetime.now().isoformat(), "error": str(exc)}
+
+        # Sleep after the run, not before
+        next_run_dt = datetime.now() + timedelta(seconds=interval_secs)
+        _write_state({
+            "pid": pid,
+            "started_at": started_at,
+            "status": "sleeping",
+            "run_count": run_count,
+            "last_run": last_result.get("at"),
+            "next_run": next_run_dt.isoformat(),
+            "last_result": last_result,
+            "config": config,
+        })
+        log.info("Sleeping until %s", next_run_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        await asyncio.sleep(interval_secs)
 
 
 def main() -> None:
