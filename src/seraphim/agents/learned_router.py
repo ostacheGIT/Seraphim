@@ -84,18 +84,26 @@ async def _ensure_table_in_conn(db: aiosqlite.Connection) -> None:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     await db.execute("""
         CREATE TABLE IF NOT EXISTS routing_stats (
-            query_class      TEXT NOT NULL,
-            agent            TEXT NOT NULL,
-            sample_count     INTEGER NOT NULL DEFAULT 0,
-            total_score      REAL    NOT NULL DEFAULT 0.0,
-            total_latency_ms REAL    NOT NULL DEFAULT 0.0,
-            last_updated     TEXT    NOT NULL,
+            query_class       TEXT NOT NULL,
+            agent             TEXT NOT NULL,
+            sample_count      INTEGER NOT NULL DEFAULT 0,
+            total_score       REAL    NOT NULL DEFAULT 0.0,
+            total_latency_ms  REAL    NOT NULL DEFAULT 0.0,
+            total_tokens_out  REAL    NOT NULL DEFAULT 0.0,
+            last_updated      TEXT    NOT NULL,
             PRIMARY KEY (query_class, agent)
         )
     """)
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_routing_class ON routing_stats(query_class)"
     )
+    # Migration: add total_tokens_out if the table predates this column
+    try:
+        await db.execute(
+            "ALTER TABLE routing_stats ADD COLUMN total_tokens_out REAL NOT NULL DEFAULT 0.0"
+        )
+    except Exception:
+        pass  # column already exists
     await db.commit()
     _table_ready = True
 
@@ -107,11 +115,32 @@ async def _ensure_table() -> None:
         await _ensure_table_in_conn(db)
 
 
+# ── Multi-constraint composite score ─────────────────────────────────────────
+
+_QUALITY_W = 0.60   # accuracy is the primary objective
+_SPEED_W   = 0.30   # latency matters for UX
+_COST_W    = 0.10   # token efficiency as tie-breaker
+_REF_LATENCY_MS = 10_000.0   # 10 s → speed score of 0
+_REF_TOKENS     = 2_000.0    # 2 000 tokens → efficiency score of 0
+
+
+def _composite_score(
+    mean_score: float,
+    mean_latency_ms: float,
+    mean_tokens: float,
+) -> float:
+    """Weighted multi-constraint score: quality (60%) + speed (30%) + efficiency (10%)."""
+    speed      = 1.0 - min(1.0, mean_latency_ms / _REF_LATENCY_MS)
+    efficiency = 1.0 - min(1.0, mean_tokens / _REF_TOKENS)
+    return _QUALITY_W * mean_score + _SPEED_W * speed + _COST_W * efficiency
+
+
 async def update_routing_stats(
     agent: str,
     query_class: str,
     score: float,
     latency_ms: float = 0.0,
+    tokens_out: float = 0.0,
 ) -> None:
     """Upsert running stats for (query_class, agent). Called after each trace."""
     now = datetime.now().isoformat()
@@ -119,21 +148,23 @@ async def update_routing_stats(
         await _ensure_table_in_conn(db)
         await db.execute(
             """
-            INSERT INTO routing_stats (query_class, agent, sample_count, total_score, total_latency_ms, last_updated)
-            VALUES (?, ?, 1, ?, ?, ?)
+            INSERT INTO routing_stats
+                (query_class, agent, sample_count, total_score, total_latency_ms, total_tokens_out, last_updated)
+            VALUES (?, ?, 1, ?, ?, ?, ?)
             ON CONFLICT(query_class, agent) DO UPDATE SET
                 sample_count     = sample_count + 1,
-                total_score      = total_score + excluded.total_score,
+                total_score      = total_score      + excluded.total_score,
                 total_latency_ms = total_latency_ms + excluded.total_latency_ms,
+                total_tokens_out = total_tokens_out + excluded.total_tokens_out,
                 last_updated     = excluded.last_updated
             """,
-            (query_class, agent, score, latency_ms, now),
+            (query_class, agent, score, latency_ms, tokens_out, now),
         )
         await db.commit()
 
 
 async def get_routing_stats() -> list[dict]:
-    """Return all routing stats as list of dicts (sorted by query_class, mean_score desc)."""
+    """Return all routing stats with composite scores (sorted by query_class, composite desc)."""
     async with aiosqlite.connect(_DB_PATH) as db:
         await _ensure_table_in_conn(db)
         db.row_factory = aiosqlite.Row
@@ -142,14 +173,23 @@ async def get_routing_stats() -> list[dict]:
                 query_class,
                 agent,
                 sample_count,
-                ROUND(total_score / sample_count, 3)      AS mean_score,
-                ROUND(total_latency_ms / sample_count, 0) AS mean_latency_ms,
+                ROUND(total_score       / sample_count, 3) AS mean_score,
+                ROUND(total_latency_ms  / sample_count, 0) AS mean_latency_ms,
+                ROUND(total_tokens_out  / sample_count, 0) AS mean_tokens_out,
                 last_updated
             FROM routing_stats
             ORDER BY query_class, mean_score DESC
         """) as cur:
             rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["composite_score"] = round(
+            _composite_score(d["mean_score"], d["mean_latency_ms"], d["mean_tokens_out"]), 3
+        )
+        result.append(d)
+    return result
 
 
 # ── Learned routing decision ──────────────────────────────────────────────────
@@ -179,16 +219,15 @@ async def learned_route(
     async with aiosqlite.connect(_DB_PATH) as db:
         await _ensure_table_in_conn(db)
         db.row_factory = aiosqlite.Row
-        # Get all agents for this class with enough samples
         async with db.execute(
             """
             SELECT agent,
-                   total_score / sample_count AS mean_score,
-                   total_latency_ms / sample_count AS mean_latency_ms,
+                   total_score       / sample_count AS mean_score,
+                   total_latency_ms  / sample_count AS mean_latency_ms,
+                   total_tokens_out  / sample_count AS mean_tokens_out,
                    sample_count
             FROM routing_stats
             WHERE query_class = ? AND sample_count >= ?
-            ORDER BY mean_score DESC
             """,
             (query_class, min_samples),
         ) as cur:
@@ -197,30 +236,37 @@ async def learned_route(
     if not rows:
         return None
 
-    best = rows[0]
-    best_agent = best["agent"]
-    best_score = best["mean_score"]
-
-    # Get static agent's score if we have it
-    static_score = next(
-        (r["mean_score"] for r in rows if r["agent"] == static_agent),
-        None,
+    # Rank by multi-constraint composite score (quality + speed + efficiency)
+    ranked = sorted(
+        rows,
+        key=lambda r: _composite_score(r["mean_score"], r["mean_latency_ms"], r["mean_tokens_out"]),
+        reverse=True,
     )
 
-    # If static agent is already best (or tied within threshold), don't override
+    best = ranked[0]
+    best_agent = best["agent"]
+    best_composite = _composite_score(best["mean_score"], best["mean_latency_ms"], best["mean_tokens_out"])
+
+    static_row = next((r for r in ranked if r["agent"] == static_agent), None)
+    static_composite = (
+        _composite_score(static_row["mean_score"], static_row["mean_latency_ms"], static_row["mean_tokens_out"])
+        if static_row else None
+    )
+
     if best_agent == static_agent:
         return None
-    if static_score is not None and (best_score - static_score) < min_advantage:
+    if static_composite is not None and (best_composite - static_composite) < min_advantage:
         return None
 
-    advantage = best_score - (static_score or 0.0)
+    advantage = best_composite - (static_composite or 0.0)
     return RoutingDecision(
         agent=best_agent,
         skill=best_agent.split(":")[1] if best_agent.startswith("skill:") else None,
         reason=(
             f"learned({query_class}): {best_agent} "
-            f"score={best_score:.3f} vs {static_agent} "
-            f"score={f'{static_score:.3f}' if static_score is not None else '?'} "
+            f"composite={best_composite:.3f} [q={best['mean_score']:.2f} "
+            f"lat={best['mean_latency_ms']:.0f}ms tok={best['mean_tokens_out']:.0f}] "
+            f"vs {static_agent} composite={f'{static_composite:.3f}' if static_composite else '?'} "
             f"Δ={advantage:+.3f} n={best['sample_count']}"
         ),
     )

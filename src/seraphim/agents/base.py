@@ -1290,6 +1290,97 @@ class ReActAgent(BaseAgent):
         await _tracer.save()
         return "I was unable to complete the task within the allowed steps."
 
+class DeepResearchAgent(BaseAgent):
+    """Multi-hop research agent: search → analyse gaps → re-search → cite sources."""
+
+    name = "deep_research"
+    description = "Recherche approfondie multi-hop avec citations — cherche, synthétise, re-cherche si lacune"
+    _MAX_HOPS = 4
+
+    system_prompt = (
+        "You are Seraphim in deep-research mode. "
+        "You produce comprehensive, well-sourced answers by iterating over multiple searches. "
+        "Always cite your sources with inline [N] references."
+        + _IDENTITY_BLOCK
+    )
+
+    async def run(self, query: str, context: AgentContext | None = None) -> str:
+        web_search = SKILL_REGISTRY.get("web_search")
+        if not web_search:
+            # Graceful fallback to researcher if web_search unavailable
+            ctx = self.build_context(query, context)
+            return await self._chat(ctx.messages)
+
+        sources: list[dict] = []   # [{"query": str, "content": str}]
+        next_query = query
+
+        for hop in range(self._MAX_HOPS):
+            result = await web_search.run(query=next_query, max_results=5)
+            if result.success and result.output.strip():
+                sources.append({"query": next_query, "content": result.output})
+                logger.debug("[deep_research] hop %d/%d — '%s…' → %d chars",
+                             hop + 1, self._MAX_HOPS, next_query[:50], len(result.output))
+            else:
+                logger.debug("[deep_research] hop %d — search failed or empty", hop + 1)
+
+            if hop == self._MAX_HOPS - 1:
+                break
+
+            # Ask LLM: is the original question answered? If not, what to search next?
+            gap_prompt = (
+                f"Original question: {query}\n\n"
+                f"Research collected so far:\n{self._format_sources(sources)}\n\n"
+                "Is the question fully answered by the research above?\n"
+                "- If YES: reply with exactly: DONE\n"
+                "- If NO: reply with exactly: SEARCH: <specific follow-up query>"
+            )
+            gap_response = await self._chat([
+                {"role": "system", "content": "You are a research planner. Reply in one line only: DONE or SEARCH: <query>."},
+                {"role": "user", "content": gap_prompt},
+            ])
+            gap_response = gap_response.strip()
+            if gap_response.upper().startswith("DONE"):
+                break
+            m = re.search(r"SEARCH:\s*(.+)", gap_response, re.I)
+            if not m:
+                break
+            next_query = m.group(1).strip()
+
+        if not sources:
+            # No results at all — fall back to direct LLM answer
+            ctx = self.build_context(query, context)
+            return await self._chat(ctx.messages)
+
+        # Final synthesis with citations
+        synthesis_sys = (
+            "You are a research synthesizer. Write a comprehensive answer using ONLY the provided research.\n"
+            "Format your response as:\n"
+            "## Answer\n"
+            "<synthesis with inline [N] citations>\n\n"
+            "## Sources\n"
+            "[1] <title or URL>\n"
+            "[2] ...\n\n"
+            "Rules: cite every factual claim, do not invent information not in the research."
+        )
+        return await self._chat([
+            {"role": "system", "content": synthesis_sys},
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {query}\n\n"
+                    f"Research:\n{self._format_sources(sources)}\n\n"
+                    "Write a complete, cited answer."
+                ),
+            },
+        ])
+
+    def _format_sources(self, sources: list[dict]) -> str:
+        parts = []
+        for i, s in enumerate(sources, 1):
+            parts.append(f"[Search {i}: '{s['query']}']\n{s['content'][:1500]}")
+        return "\n\n".join(parts)
+
+
 class BuiltinSkillAgent(BaseAgent):
     """Routes built-in SKILL_REGISTRY skills directly without YAML file lookup."""
 

@@ -110,6 +110,21 @@ _MEMORY_RE = re.compile(
     re.I | re.VERBOSE,
     )
 
+_DEEP_RESEARCH_RE = re.compile(
+    r"""(?:
+        recherche\s+(?:approfondie|détaillée|complète|exhaustive)|
+        deep[- ]research|comprehensive\s+research|thorough\s+research|
+        analyse\s+(?:complète|approfondie|détaillée|exhaustive)|
+        rapport\s+(?:complet\s+)?(?:sur|about)\b|
+        état\s+de\s+l.art|state\s+of\s+the\s+art|
+        compare(?:r)?\s+.{5,60}(?:en\s+détail|thoroughly|exhaustivement)|
+        investigate\s+(?:thoroughly|in\s+depth)|
+        enquête\s+(?:approfondie\s+)?sur\b|
+        synthèse\s+(?:complète\s+)?(?:sur|de|des)\b
+    )""",
+    re.I | re.VERBOSE,
+)
+
 _THINK_RE = re.compile(
     r"""(?:
         (?:réfléchis|pense|analyse|évalue|compare|explique\s+(?:pourquoi|comment)|
@@ -204,7 +219,11 @@ def route(query: str) -> RoutingDecision:
     if _MEMORY_RE.search(q):
         return RoutingDecision(agent="chat", skill=None, reason="memory/recall intent")
 
-    # 7. Raisonnement complexe → researcher (think est un outil LLM, pas un agent standalone)
+    # 7a. Deep research — multi-hop search with citations
+    if _DEEP_RESEARCH_RE.search(q):
+        return RoutingDecision(agent="deep_research", skill=None, reason="deep research intent detected")
+
+    # 7b. Raisonnement complexe → researcher
     if _THINK_RE.search(q) or len(q.split()) > 30:
         return RoutingDecision(
             agent="researcher",
