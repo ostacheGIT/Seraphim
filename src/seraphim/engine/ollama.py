@@ -37,6 +37,9 @@ class OllamaEngine:
             timeout=self.timeout,
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
         )
+        # Tighter timeout for streaming: 30 s per chunk — if no token arrives
+        # within that window, something is hung and we should surface the error.
+        self._stream_timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 
     def _build_prompt(self, messages: List[ChatMessage]) -> str:
         parts: List[str] = []
@@ -147,7 +150,7 @@ class OllamaEngine:
         t0 = time.perf_counter_ns()
         first_token_ns: int | None = None
 
-        async with self._client.stream("POST", "/api/generate", json=payload) as response:
+        async with self._client.stream("POST", "/api/generate", json=payload, timeout=self._stream_timeout) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
@@ -200,7 +203,7 @@ class OllamaEngine:
         t0 = time.perf_counter_ns()
         first_token_ns: int | None = None
 
-        async with self._client.stream("POST", "/api/chat", json=payload) as response:
+        async with self._client.stream("POST", "/api/chat", json=payload, timeout=self._stream_timeout) as response:
             if response.status_code >= 400:
                 body = await response.aread()
                 try:
@@ -241,7 +244,11 @@ def _make_default_engine() -> OllamaEngine:
             model=settings.engine.model,
             base_url=settings.engine.base_url,
         )
-    except Exception:
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("seraphim.engine.ollama").warning(
+            "Could not load engine settings (%s) — using defaults", exc
+        )
         return OllamaEngine()
 
 

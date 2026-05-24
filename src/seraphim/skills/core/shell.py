@@ -47,17 +47,27 @@ class ShellSkill(BaseSkill):
             env["PATH"] = str(npm_global) + os.pathsep + env.get("PATH", "")
         return env
 
+    _MAX_TIMEOUT = 300  # server-side ceiling — prevents 1-hour hangs from LLM requests
+
     @staticmethod
     def _fix_win_command(cmd: str) -> str:
-        """Quote unquoted URLs containing & so PowerShell doesn't split them."""
-        return re.sub(
-            r'(?<!["\'])https?://\S+',
-            lambda m: f'"{m.group(0)}"' if "&" in m.group(0) else m.group(0),
-            cmd,
-        )
+        """Quote unquoted URLs for PowerShell.
+
+        Wraps URLs in double quotes when they contain & (PS call operator) or
+        internal double quotes (which would break quoting). Internal " chars are
+        replaced with ' to avoid escaping hell.
+        """
+        def _quote(m: re.Match) -> str:
+            url = m.group(0)
+            if "&" in url or '"' in url:
+                return f'"{url.replace(chr(34), chr(39))}"'
+            return url
+
+        return re.sub(r'(?<!["\'])https?://\S+', _quote, cmd)
 
     async def run(self, command: str, timeout: int = 60, **kwargs) -> SkillResult:
-        logger.info("shell exec: %s", command)
+        timeout = min(int(timeout), self._MAX_TIMEOUT)
+        logger.info("shell exec (timeout=%ds): %s", timeout, command)
         try:
             if sys.platform == "win32":
                 # cmd.exe ne supporte pas les single quotes — utilise PowerShell

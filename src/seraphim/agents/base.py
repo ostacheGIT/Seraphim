@@ -19,37 +19,19 @@ _MAX_OUTPUT = 4000
 
 
 def _extract_args_json(response: str) -> dict:
-    """Extrait le JSON après ARGS: en comptant les accolades pour gérer les {} imbriqués."""
+    """Extract the JSON object after ARGS: using JSONDecoder.raw_decode.
+
+    raw_decode starts at the first { and handles nested objects, escaped quotes,
+    and unicode correctly — no manual brace counting needed.
+    """
     m = re.search(r"ARGS:\s*(\{)", response)
     if not m:
         return {}
-    start = m.start(1)
-    depth = 0
-    in_str = False
-    escape = False
-    for i, ch in enumerate(response[start:], start):
-        if escape:
-            escape = False
-            continue
-        if ch == "\\" and in_str:
-            escape = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                raw = response[start : i + 1].replace("\\\\", "\\")
-                try:
-                    return json.loads(raw)
-                except json.JSONDecodeError:
-                    return {}
-    return {}
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(response, m.start(1))
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
 def _format_install_cmd(step: dict, is_windows: bool) -> str:
@@ -1214,8 +1196,18 @@ class ReActAgent(BaseAgent):
         _tracer = TraceCollector(self.name, query, getattr(context, "session_id", ""))
 
         # ── ReAct loop standard pour tout le reste ───────────────────────────
-        for _ in range(8):
+        for hop in range(8):
             await ctx.maybe_compress(self.engine)
+            # Warn at hop 6 (2 turns left) so the model wraps up gracefully
+            if hop == 6:
+                ctx.messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have at most 2 turns left. "
+                        "If you have enough information, give a direct final answer now. "
+                        "Do NOT call another tool unless strictly necessary."
+                    ),
+                })
             response = await self._chat(ctx.messages)
 
             action_match = re.search(r"ACTION:\s*([\w:.\-/]+)", response)
@@ -1337,10 +1329,14 @@ class DeepResearchAgent(BaseAgent):
                 "- If YES: reply with exactly: DONE\n"
                 "- If NO: reply with exactly: SEARCH: <specific follow-up query>"
             )
-            gap_response = await self._chat([
-                {"role": "system", "content": "You are a research planner. Reply in one line only: DONE or SEARCH: <query>."},
-                {"role": "user", "content": gap_prompt},
-            ])
+            try:
+                gap_response = await self._chat([
+                    {"role": "system", "content": "You are a research planner. Reply in one line only: DONE or SEARCH: <query>."},
+                    {"role": "user", "content": gap_prompt},
+                ])
+            except Exception as _e:
+                logger.warning("[deep_research] gap-check LLM call failed: %s", _e)
+                break
             gap_response = gap_response.strip()
             if gap_response.upper().startswith("DONE"):
                 break
@@ -1348,6 +1344,8 @@ class DeepResearchAgent(BaseAgent):
             if not m:
                 break
             next_query = m.group(1).strip()
+            if not next_query:
+                break
 
         if not sources:
             # No results at all — fall back to direct LLM answer

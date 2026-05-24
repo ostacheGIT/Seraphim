@@ -29,6 +29,11 @@ class ClaudeEngine:
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        # Persistent client — reuses TLS connections across requests
+        self._client = httpx.AsyncClient(
+            timeout=self.timeout,
+            limits=httpx.Limits(max_keepalive_connections=3, max_connections=5),
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -63,14 +68,13 @@ class ClaudeEngine:
         }
         if system:
             payload["system"] = system
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self._BASE_URL}/v1/messages",
-                headers=self._headers(),
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(
+            f"{self._BASE_URL}/v1/messages",
+            headers=self._headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
         content: str = (data.get("content") or [{}])[0].get("text", "")
         return {"messages": [{"role": "assistant", "content": content}]}
 
@@ -88,13 +92,12 @@ class ClaudeEngine:
         }
         if system:
             payload["system"] = system
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self._BASE_URL}/v1/messages",
-                headers=self._headers(),
-                json=payload,
-            ) as resp:
+        async with self._client.stream(
+            "POST",
+            f"{self._BASE_URL}/v1/messages",
+            headers=self._headers(),
+            json=payload,
+        ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):

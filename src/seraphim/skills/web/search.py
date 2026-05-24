@@ -1,7 +1,10 @@
 import asyncio
+import logging
 
 from seraphim.skills.base import BaseSkill, SkillResult
 from ddgs import DDGS
+
+logger = logging.getLogger(__name__)
 
 
 def _ddgs_search(query: str, max_results: int) -> list[dict]:
@@ -39,4 +42,5 @@ class WebSearchSkill(BaseSkill):
             return SkillResult(success=True, output="\n".join(lines))
 
         except Exception as e:
+            logger.warning("web_search failed for %r: %s", query, e)
             return SkillResult(success=False, output="Erreur de recherche web.", error=str(e))

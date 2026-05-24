@@ -40,7 +40,12 @@ def init_engines() -> None:
     global _default_engine_id, _gpu_available
 
     from seraphim.engine.metrics import get_gpu_snapshot
-    _gpu = get_gpu_snapshot()
+    try:
+        from seraphim.settings import settings as _s
+        _gpu_idx = _s.engine.gpu_device_index
+    except Exception:
+        _gpu_idx = 0
+    _gpu = get_gpu_snapshot(_gpu_idx)
     _gpu_available = _gpu is not None
     if _gpu_available:
         logger.info("GPU detected: %s (%.0f MB free)", _gpu.gpu_name, _gpu.vram_free_mb)
@@ -82,40 +87,51 @@ def init_engines() -> None:
         _register_external_engines(ext)
 
 
+def _secret(v) -> str:
+    """Unwrap a SecretStr or return the plain string."""
+    try:
+        return v.get_secret_value()
+    except AttributeError:
+        return str(v) if v else ""
+
+
 def _register_external_engines(ext) -> None:
     from seraphim.engine.openai_compat import OpenAICompatEngine
     from seraphim.engine.claude import ClaudeEngine
 
-    if ext.openai_key:
+    openai_key = _secret(ext.openai_key)
+    if openai_key:
         label = "OpenAI " + ext.openai_model
         _ENGINE_LABELS["openai"] = label
         register_engine("openai", OpenAICompatEngine(
             model=ext.openai_model,
-            api_key=ext.openai_key,
+            api_key=openai_key,
             base_url=ext.openai_base_url,
             name="OpenAI",
             engine_id="openai",
         ))
         logger.info("Registered OpenAI engine (%s)", ext.openai_model)
 
-    if ext.mistral_key:
+    mistral_key = _secret(ext.mistral_key)
+    if mistral_key:
         label = "Mistral " + ext.mistral_model
         _ENGINE_LABELS["mistral"] = label
         register_engine("mistral", OpenAICompatEngine(
             model=ext.mistral_model,
-            api_key=ext.mistral_key,
+            api_key=mistral_key,
             base_url="https://api.mistral.ai",
             name="Mistral",
             engine_id="mistral",
         ))
         logger.info("Registered Mistral engine (%s)", ext.mistral_model)
 
-    if ext.claude_key:
+    claude_key = _secret(ext.claude_key)
+    if claude_key:
         label = "Claude " + ext.claude_model
         _ENGINE_LABELS["claude"] = label
         register_engine("claude", ClaudeEngine(
             model=ext.claude_model,
-            api_key=ext.claude_key,
+            api_key=claude_key,
         ))
         logger.info("Registered Claude engine (%s)", ext.claude_model)
 
@@ -175,9 +191,9 @@ def get_external_keys_status() -> Dict[str, bool]:
     from seraphim.settings import settings
     ext = settings.external_api
     return {
-        "openai":  bool(_runtime_keys.get("openai")  or ext.openai_key),
-        "mistral": bool(_runtime_keys.get("mistral") or ext.mistral_key),
-        "claude":  bool(_runtime_keys.get("claude")  or ext.claude_key),
+        "openai":  bool(_runtime_keys.get("openai")  or _secret(ext.openai_key)),
+        "mistral": bool(_runtime_keys.get("mistral") or _secret(ext.mistral_key)),
+        "claude":  bool(_runtime_keys.get("claude")  or _secret(ext.claude_key)),
     }
 
 

@@ -22,6 +22,29 @@ from typing import Optional
 
 _BASE_DIR = Path.home() / ".seraphim" / "connectors"
 
+
+def _urlopen_retry(req, timeout: int = 15, retries: int = 3, backoff: float = 1.0):
+    """urllib.request.urlopen with exponential-backoff retry on transient errors.
+
+    Retries on server errors (5xx) and network failures. Raises immediately on
+    client errors (4xx) since retrying wouldn't help.
+    """
+    import urllib.error
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                raise  # client error — do not retry
+            last_exc = e
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            last_exc = e
+        if attempt < retries - 1:
+            time.sleep(backoff * (2 ** attempt))
+    raise last_exc
+
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
@@ -99,9 +122,7 @@ def _refresh_access_token(client_id: str, client_secret: str, refresh_token: str
         "grant_type": "refresh_token",
     }).encode()
     req = urllib.request.Request(_TOKEN_URL, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        resp = json.loads(r.read())
-    return resp
+    return _urlopen_retry(req)
 
 
 def get_access_token() -> str:
@@ -191,8 +212,7 @@ def run_oauth_flow() -> None:
         "grant_type": "authorization_code",
     }).encode()
     req = urllib.request.Request(_TOKEN_URL, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        resp = json.loads(r.read())
+    resp = _urlopen_retry(req)
 
     if "error" in resp:
         raise RuntimeError(f"Token exchange failed: {resp['error']}: {resp.get('error_description', '')}")

@@ -13,12 +13,12 @@ _BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
 def _api_get(path: str, access_token: str) -> dict:
+    from seraphim.connectors.oauth import _urlopen_retry
     req = urllib.request.Request(
         f"{_BASE}/{path}",
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read())
+    return _urlopen_retry(req)
 
 
 def _api_list_messages(query: str, max_results: int, access_token: str) -> list[dict]:

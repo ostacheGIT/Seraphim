@@ -26,6 +26,22 @@ REVERB_MS   = 0.025
 
 _CACHE_DIR = Path.home() / ".seraphim" / "tts_cache"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_CACHE_MAX_MB = 100
+
+
+def _evict_tts_cache() -> None:
+    """Delete oldest cached WAV files until total cache size is below _CACHE_MAX_MB."""
+    try:
+        files = sorted(_CACHE_DIR.glob("*.wav"), key=lambda p: p.stat().st_mtime)
+        total = sum(f.stat().st_size for f in files)
+        limit = _CACHE_MAX_MB * 1024 * 1024
+        for f in files:
+            if total <= limit:
+                break
+            total -= f.stat().st_size
+            f.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 _voice: PiperVoice | None = None
 _lock = threading.Lock()
@@ -86,6 +102,7 @@ def synthesize_to_bytes(text: str) -> bytes:
         wf.writeframes(pcm)
     wav = buf.getvalue()
     cache_file.write_bytes(wav)
+    _evict_tts_cache()
     return wav
 
 

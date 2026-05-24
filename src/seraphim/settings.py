@@ -1,7 +1,8 @@
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr, field_validator
 from pydantic_settings import BaseSettings
 import yaml
+
 
 class EngineSettings(BaseModel):
     provider: str = "ollama"          # ollama | vllm | llamacpp
@@ -9,10 +10,33 @@ class EngineSettings(BaseModel):
     base_url: str = "http://localhost:11434"
     temperature: float = 0.7
     context_window: int = 4096
+    gpu_device_index: int = 0         # which GPU to monitor (multi-GPU setups)
     # vLLM-specific (used when provider=vllm)
     vllm_port: int = 8000
-    vllm_gpu_memory_utilization: float = 0.85  # safe default for 4GB VRAM
+    vllm_gpu_memory_utilization: float = 0.85
     vllm_max_model_len: int = 4096
+
+    @field_validator("temperature")
+    @classmethod
+    def _check_temperature(cls, v: float) -> float:
+        if not 0.0 <= v <= 2.0:
+            raise ValueError(f"temperature must be in [0.0, 2.0], got {v}")
+        return v
+
+    @field_validator("context_window")
+    @classmethod
+    def _check_context_window(cls, v: int) -> int:
+        if v < 512:
+            raise ValueError(f"context_window must be >= 512, got {v}")
+        return v
+
+    @field_validator("gpu_device_index")
+    @classmethod
+    def _check_gpu_device_index(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"gpu_device_index must be >= 0, got {v}")
+        return v
+
 
 class ServerSettings(BaseModel):
     host: str = "0.0.0.0"
@@ -20,6 +44,14 @@ class ServerSettings(BaseModel):
     reload: bool = False
     api_key: str = ""
     cors_origins: list[str] = ["*"]
+
+    @field_validator("port")
+    @classmethod
+    def _check_port(cls, v: int) -> int:
+        if not 1 <= v <= 65535:
+            raise ValueError(f"port must be in [1, 65535], got {v}")
+        return v
+
 
 class MemorySettings(BaseModel):
     backend: str = "sqlite"
@@ -30,8 +62,10 @@ class MemorySettings(BaseModel):
     context_min_score: float = 0.0
     context_max_tokens: int = 2048
 
+
 class AgentsSettings(BaseModel):
     default: str = "chat"
+
 
 class LearningSettings(BaseModel):
     auto_start: bool = False
@@ -41,17 +75,20 @@ class LearningSettings(BaseModel):
     run_grpo: bool = False
     run_finetune: bool = False
 
+
 class ExternalApiSettings(BaseModel):
-    openai_key: str = ""
+    # SecretStr prevents keys from appearing in logs, tracebacks, and repr()
+    openai_key: SecretStr = SecretStr("")
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com"
-    mistral_key: str = ""
+    mistral_key: SecretStr = SecretStr("")
     mistral_model: str = "mistral-small-latest"
-    claude_key: str = ""
+    claude_key: SecretStr = SecretStr("")
     claude_model: str = "claude-haiku-4-5-20251001"
     # Automatic fallback: if Ollama is unreachable, use this external engine
     fallback_enabled: bool = False
     fallback_engine: str = ""  # "openai" | "mistral" | "claude"
+
 
 class Settings(BaseSettings):
     engine: EngineSettings = EngineSettings()
@@ -69,6 +106,7 @@ class Settings(BaseSettings):
             data = yaml.safe_load(path.read_text()) or {}
             return cls(**data)
         return cls()
+
 
 _config_candidates = [
     Path("configs/seraphim/config.yaml"),

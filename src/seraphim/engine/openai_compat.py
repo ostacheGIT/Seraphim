@@ -30,6 +30,11 @@ class OpenAICompatEngine:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Persistent client — reuses TLS connections across requests
+        self._client = httpx.AsyncClient(
+            timeout=self.timeout,
+            limits=httpx.Limits(max_keepalive_connections=3, max_connections=5),
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -46,14 +51,13 @@ class OpenAICompatEngine:
         payload: Dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:
             payload["tools"] = tools
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/v1/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await self._client.post(
+            f"{self.base_url}/v1/chat/completions",
+            headers=self._headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
         content: str = data["choices"][0]["message"].get("content") or ""
         return {"messages": [{"role": "assistant", "content": content}]}
 
@@ -67,13 +71,12 @@ class OpenAICompatEngine:
             "messages": messages,
             "stream": True,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            ) as resp:
+        async with self._client.stream(
+            "POST",
+            f"{self.base_url}/v1/chat/completions",
+            headers=self._headers(),
+            json=payload,
+        ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
