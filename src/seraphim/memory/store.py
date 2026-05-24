@@ -40,6 +40,50 @@ async def init_db() -> None:
                 updated_at TEXT    NOT NULL
             )
         """)
+        # FTS5 full-text index for fast search across conversation content.
+        # Try trigram tokenizer first (SQLite ≥ 3.38 / Python ≥ 3.11, supports
+        # arbitrary substring MATCH); fall back to unicode61 (word-boundary only).
+        for _tok in ("trigram", "unicode61"):
+            try:
+                await db.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
+                    USING fts5(
+                        id       UNINDEXED,
+                        session  UNINDEXED,
+                        content,
+                        tokenize="{_tok}"
+                    )
+                """)
+                break
+            except Exception:
+                continue
+        # Triggers keep FTS in sync automatically
+        await db.execute("""
+            CREATE TRIGGER IF NOT EXISTS conversations_fts_ai
+            AFTER INSERT ON conversations BEGIN
+                INSERT INTO conversations_fts(id, session, content)
+                VALUES (new.id, new.session, new.content);
+            END
+        """)
+        await db.execute("""
+            CREATE TRIGGER IF NOT EXISTS conversations_fts_ad
+            AFTER DELETE ON conversations BEGIN
+                DELETE FROM conversations_fts WHERE id = old.id;
+            END
+        """)
+        await db.execute("""
+            CREATE TRIGGER IF NOT EXISTS conversations_fts_au
+            AFTER UPDATE OF content ON conversations BEGIN
+                DELETE FROM conversations_fts WHERE id = old.id;
+                INSERT INTO conversations_fts(id, session, content)
+                VALUES (new.id, new.session, new.content);
+            END
+        """)
+        # Populate FTS with any rows that pre-date this migration
+        await db.execute("""
+            INSERT OR IGNORE INTO conversations_fts(id, session, content)
+            SELECT id, session, content FROM conversations
+        """)
         await db.commit()
 
 
@@ -98,34 +142,44 @@ async def list_sessions() -> list[dict]:
     ]
 
 
+_SESSION_SEARCH_SQL = """
+    SELECT
+        c.session,
+        c.agent,
+        COALESCE(first_msg.title, first_msg.content) AS title,
+        c.timestamp AS updated_at
+    FROM conversations c
+    JOIN (
+        SELECT session, MAX(id) AS max_id FROM conversations GROUP BY session
+    ) mx ON mx.max_id = c.id
+    JOIN (
+        SELECT session, MIN(id) AS min_id
+        FROM conversations WHERE role = 'user' GROUP BY session
+    ) fm ON fm.session = c.session
+    JOIN conversations first_msg ON first_msg.id = fm.min_id
+    WHERE c.session IN ({subquery})
+    ORDER BY c.timestamp DESC
+    LIMIT 60
+"""
+
+_FTS_SUBQUERY  = "SELECT DISTINCT session FROM conversations_fts WHERE conversations_fts MATCH ?"
+_LIKE_SUBQUERY = "SELECT DISTINCT session FROM conversations WHERE lower(content) LIKE lower(?)"
+
+
 async def search_sessions(query: str) -> list[dict]:
-    """Recherche fulltext dans les titres et le contenu des messages."""
-    pattern = f"%{query}%"
+    """Fulltext search across conversation content using FTS5 (fast) with LIKE fallback."""
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-            SELECT
-                c.session,
-                c.agent,
-                COALESCE(first_msg.title, first_msg.content) AS title,
-                c.timestamp AS updated_at
-            FROM conversations c
-            JOIN (
-                SELECT session, MAX(id) AS max_id FROM conversations GROUP BY session
-            ) mx ON mx.max_id = c.id
-            JOIN (
-                SELECT session, MIN(id) AS min_id
-                FROM conversations WHERE role = 'user' GROUP BY session
-            ) fm ON fm.session = c.session
-            JOIN conversations first_msg ON first_msg.id = fm.min_id
-            WHERE c.session IN (
-                SELECT DISTINCT session FROM conversations
-                WHERE lower(content) LIKE lower(?)
-                   OR lower(COALESCE(title, '')) LIKE lower(?)
-            )
-            ORDER BY c.timestamp DESC
-            LIMIT 60
-        """, (pattern, pattern)) as cursor:
-            rows = await cursor.fetchall()
+        # Try FTS5 first — O(log n), supports trigram substring or word-prefix matching
+        try:
+            sql = _SESSION_SEARCH_SQL.format(subquery=_FTS_SUBQUERY)
+            async with db.execute(sql, (query,)) as cursor:
+                rows = await cursor.fetchall()
+        except Exception:
+            # Fall back to full-table LIKE scan (slow but always correct)
+            pattern = f"%{query}%"
+            sql = _SESSION_SEARCH_SQL.format(subquery=_LIKE_SUBQUERY)
+            async with db.execute(sql, (pattern,)) as cursor:
+                rows = await cursor.fetchall()
     return [
         {
             "session":   r[0],
@@ -181,14 +235,14 @@ async def prune_old_sessions(max_age_days: int = 90, max_total_sessions: int = 5
     """Remove sessions older than max_age_days and keep at most max_total_sessions.
 
     Returns {"deleted_sessions": N, "deleted_messages": M}.
+    Uses bulk IN-list deletes — no per-session round-trips.
     """
-    from datetime import timezone
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     deleted_sessions = 0
     deleted_messages = 0
 
     async with aiosqlite.connect(DB_PATH) as db:
-        # 1. Delete sessions whose last message is older than cutoff
+        # 1. Sessions whose last message predates the cutoff
         async with db.execute(
             """SELECT session FROM (
                    SELECT session, MAX(timestamp) AS last_ts FROM conversations
@@ -197,17 +251,8 @@ async def prune_old_sessions(max_age_days: int = 90, max_total_sessions: int = 5
             (cutoff,),
         ) as cur:
             old = [r[0] for r in await cur.fetchall()]
-        for sess in old:
-            async with db.execute(
-                "SELECT COUNT(*) FROM conversations WHERE session = ?", (sess,)
-            ) as cur:
-                n = (await cur.fetchone())[0]
-            await db.execute("DELETE FROM conversations WHERE session = ?", (sess,))
-            await db.execute("DELETE FROM session_summaries WHERE session = ?", (sess,))
-            deleted_sessions += 1
-            deleted_messages += n
 
-        # 2. If still too many sessions, prune the oldest ones
+        # 2. Overflow sessions beyond max_total_sessions (oldest first)
         async with db.execute(
             """SELECT session FROM (
                    SELECT session, MAX(timestamp) AS last_ts FROM conversations
@@ -217,17 +262,26 @@ async def prune_old_sessions(max_age_days: int = 90, max_total_sessions: int = 5
             (max_total_sessions,),
         ) as cur:
             overflow = [r[0] for r in await cur.fetchall()]
-        for sess in overflow:
-            async with db.execute(
-                "SELECT COUNT(*) FROM conversations WHERE session = ?", (sess,)
-            ) as cur:
-                n = (await cur.fetchone())[0]
-            await db.execute("DELETE FROM conversations WHERE session = ?", (sess,))
-            await db.execute("DELETE FROM session_summaries WHERE session = ?", (sess,))
-            deleted_sessions += 1
-            deleted_messages += n
 
-        await db.commit()
+        # Deduplicate: overflow may overlap with old
+        to_delete = list({*old, *overflow})
+
+        if to_delete:
+            ph = ",".join("?" * len(to_delete))
+            # Count in one query
+            async with db.execute(
+                f"SELECT COUNT(*) FROM conversations WHERE session IN ({ph})", to_delete
+            ) as cur:
+                deleted_messages = (await cur.fetchone())[0]
+            # Bulk delete — triggers cascade to conversations_fts automatically
+            await db.execute(
+                f"DELETE FROM conversations WHERE session IN ({ph})", to_delete
+            )
+            await db.execute(
+                f"DELETE FROM session_summaries WHERE session IN ({ph})", to_delete
+            )
+            deleted_sessions = len(to_delete)
+            await db.commit()
 
     return {"deleted_sessions": deleted_sessions, "deleted_messages": deleted_messages}
 
