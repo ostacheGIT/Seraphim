@@ -711,6 +711,8 @@ class ChatAgent(BaseAgent):
         response, tool_calls = await self._chat_with_tools(ctx.messages, tools)
         if tool_calls:
             return await _dispatch_skill_tool_calls(tool_calls, query)
+        # Quality gate — retry if response looks poor (heuristic-first, no judge cost for good responses)
+        response = await self._maybe_retry_response(ctx.messages, response)
         ctx.add_assistant(response)
         # Self-correct if the response contains Python code with syntax errors
         from seraphim.agents.verification import self_correct_code
@@ -918,6 +920,8 @@ class ResearcherAgent(BaseAgent):
     async def run(self, query: str, context: AgentContext | None = None) -> str:
         ctx = self.build_context(query, context)
         response = await self._chat(ctx.messages)
+        # Quality gate — retry if response looks poor
+        response = await self._maybe_retry_response(ctx.messages, response)
         ctx.add_assistant(response)
         # Self-correct code blocks if they have syntax errors
         from seraphim.agents.verification import self_correct_code
@@ -1211,6 +1215,7 @@ class ReActAgent(BaseAgent):
 
         # ── ReAct loop standard pour tout le reste ───────────────────────────
         for _ in range(8):
+            await ctx.maybe_compress(self.engine)
             response = await self._chat(ctx.messages)
 
             action_match = re.search(r"ACTION:\s*([\w:.\-/]+)", response)
@@ -1940,8 +1945,9 @@ def get_agent(name: str) -> BaseAgent:
         if skill_name in SKILL_REGISTRY:
             return BuiltinSkillAgent(skill_name)
         return SkillAgent(skill_name)
-    cls = AGENT_REGISTRY.get(name)
+    # Use auto-registered registry first (populated via __init_subclass__)
+    cls = BaseAgent._REGISTRY.get(name) or AGENT_REGISTRY.get(name)
     if cls is None:
-        available = ", ".join(AGENT_REGISTRY.keys())
+        available = ", ".join(sorted(BaseAgent._REGISTRY) or AGENT_REGISTRY.keys())
         raise ValueError(f"Unknown agent '{name}'. Available: {available}")
     return cls()
