@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,110 @@ async def delete_session(session: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM conversations WHERE session = ?", (session,))
         await db.commit()
+
+
+async def trim_session_if_needed(session: str, max_messages: int = 200) -> int:
+    """Delete oldest rows of a session if it exceeds max_messages. Returns rows deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM conversations WHERE session = ?", (session,)
+        ) as cur:
+            count = (await cur.fetchone())[0]
+        if count <= max_messages:
+            return 0
+        await db.execute(
+            """DELETE FROM conversations
+               WHERE session = ? AND id NOT IN (
+                   SELECT id FROM conversations WHERE session = ?
+                   ORDER BY id DESC LIMIT ?
+               )""",
+            (session, session, max_messages),
+        )
+        await db.commit()
+        return count - max_messages
+
+
+async def prune_old_sessions(max_age_days: int = 90, max_total_sessions: int = 500) -> dict:
+    """Remove sessions older than max_age_days and keep at most max_total_sessions.
+
+    Returns {"deleted_sessions": N, "deleted_messages": M}.
+    """
+    from datetime import timezone
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    deleted_sessions = 0
+    deleted_messages = 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. Delete sessions whose last message is older than cutoff
+        async with db.execute(
+            """SELECT session FROM (
+                   SELECT session, MAX(timestamp) AS last_ts FROM conversations
+                   GROUP BY session
+               ) WHERE last_ts < ?""",
+            (cutoff,),
+        ) as cur:
+            old = [r[0] for r in await cur.fetchall()]
+        for sess in old:
+            async with db.execute(
+                "SELECT COUNT(*) FROM conversations WHERE session = ?", (sess,)
+            ) as cur:
+                n = (await cur.fetchone())[0]
+            await db.execute("DELETE FROM conversations WHERE session = ?", (sess,))
+            await db.execute("DELETE FROM session_summaries WHERE session = ?", (sess,))
+            deleted_sessions += 1
+            deleted_messages += n
+
+        # 2. If still too many sessions, prune the oldest ones
+        async with db.execute(
+            """SELECT session FROM (
+                   SELECT session, MAX(timestamp) AS last_ts FROM conversations
+                   GROUP BY session
+                   ORDER BY last_ts DESC
+               ) LIMIT -1 OFFSET ?""",
+            (max_total_sessions,),
+        ) as cur:
+            overflow = [r[0] for r in await cur.fetchall()]
+        for sess in overflow:
+            async with db.execute(
+                "SELECT COUNT(*) FROM conversations WHERE session = ?", (sess,)
+            ) as cur:
+                n = (await cur.fetchone())[0]
+            await db.execute("DELETE FROM conversations WHERE session = ?", (sess,))
+            await db.execute("DELETE FROM session_summaries WHERE session = ?", (sess,))
+            deleted_sessions += 1
+            deleted_messages += n
+
+        await db.commit()
+
+    return {"deleted_sessions": deleted_sessions, "deleted_messages": deleted_messages}
+
+
+async def upsert_messages(session: str, messages: list[dict], agent: str = "chat") -> int:
+    """Insert messages that are not already present (by role+content fingerprint).
+
+    Used for UI crash-recovery sync. Returns number of rows inserted.
+    """
+    inserted = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content", ""))
+            ts = str(msg.get("timestamp", datetime.now().isoformat()))
+            # Check for exact duplicate (same session, role, content)
+            async with db.execute(
+                "SELECT 1 FROM conversations WHERE session=? AND role=? AND content=? LIMIT 1",
+                (session, role, content),
+            ) as cur:
+                exists = await cur.fetchone()
+            if not exists:
+                await db.execute(
+                    "INSERT INTO conversations (session, agent, role, content, timestamp) VALUES (?,?,?,?,?)",
+                    (session, agent, role, content, ts),
+                )
+                inserted += 1
+        if inserted:
+            await db.commit()
+    return inserted
 
 
 async def truncate_session(session: str, keep_count: int) -> None:

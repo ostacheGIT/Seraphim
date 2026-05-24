@@ -35,6 +35,9 @@ from seraphim.memory.store import (
     search_sessions,
     delete_session,
     truncate_session,
+    trim_session_if_needed,
+    prune_old_sessions,
+    upsert_messages,
     save_message,
     save_session_title,
     get_session_message_count,
@@ -851,6 +854,7 @@ async def chat(req: ChatRequest):
 
     await save_message(session_id, "user", req.query, routed_agent)
     await save_message(session_id, "assistant", response, routed_agent)
+    asyncio.create_task(trim_session_if_needed(session_id))
 
     # Grab inference metrics from the engine if available
     inf = await _get_engine_metrics(engine_id)
@@ -1006,6 +1010,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             )
             asyncio.create_task(_extract_user_facts_background(req.query))
             asyncio.create_task(_maybe_summarize_session(session_id))
+            asyncio.create_task(trim_session_if_needed(session_id))
 
     from fastapi.responses import StreamingResponse as SR
     response = SR(generator(), media_type="text/plain")
@@ -1137,7 +1142,10 @@ async def search_memory(q: str = ""):
 
 
 @app.get("/memory/sessions/{session_id}")
-async def get_session_history(session_id: str, limit: int = 50):
+async def get_session_history(session_id: str, limit: int = 50, with_summary: bool = False):
+    if with_summary:
+        messages, summary = await load_history_with_summary(session_id, keep_recent=limit)
+        return {"session": session_id, "messages": messages, "summary": summary}
     messages = await load_history(session_id, limit=limit)
     return {"session": session_id, "messages": messages}
 
@@ -1146,6 +1154,34 @@ async def get_session_history(session_id: str, limit: int = 50):
 async def remove_session(session_id: str):
     await delete_session(session_id)
     return {"deleted": session_id}
+
+
+class SyncRequest(BaseModel):
+    messages: list[dict]
+    agent: str = "chat"
+
+
+@app.post("/memory/sessions/{session_id}/sync")
+async def sync_session_messages(session_id: str, req: SyncRequest):
+    """Upsert a batch of messages — used for UI crash-recovery or CLI↔UI merge.
+
+    Messages already present (same role+content) are skipped; new ones are appended.
+    Returns the number of messages actually inserted.
+    """
+    inserted = await upsert_messages(session_id, req.messages, agent=req.agent)
+    if inserted:
+        asyncio.create_task(trim_session_if_needed(session_id))
+    return {"ok": True, "inserted": inserted, "skipped": len(req.messages) - inserted}
+
+
+@app.post("/memory/prune", dependencies=[Depends(_require_api_key)])
+async def prune_memory(max_age_days: int = 90, max_total_sessions: int = 500):
+    """Remove sessions older than max_age_days and cap total sessions at max_total_sessions."""
+    result = await prune_old_sessions(
+        max_age_days=max_age_days,
+        max_total_sessions=max_total_sessions,
+    )
+    return result
 
 
 class TruncateRequest(BaseModel):

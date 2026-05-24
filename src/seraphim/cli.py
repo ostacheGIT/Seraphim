@@ -4,11 +4,43 @@ import os
 os.environ["PYTHONUTF8"] = "1"
 
 import asyncio
+import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Optional
 
 _log = logging.getLogger("seraphim.cli")
+
+_LAST_SESSION_FILE = Path.home() / ".seraphim" / "last_session.json"
+_SESSION_MAX_AGE_HOURS = 24
+
+
+def _load_last_session() -> Optional[str]:
+    """Return the last session ID if it was used within SESSION_MAX_AGE_HOURS, else None."""
+    try:
+        if not _LAST_SESSION_FILE.exists():
+            return None
+        data = json.loads(_LAST_SESSION_FILE.read_text())
+        from datetime import datetime, timedelta
+        used_at = datetime.fromisoformat(data["used_at"])
+        if datetime.now() - used_at > timedelta(hours=_SESSION_MAX_AGE_HOURS):
+            return None
+        return data.get("session_id")
+    except Exception:
+        return None
+
+
+def _save_last_session(session_id: str) -> None:
+    try:
+        from datetime import datetime
+        _LAST_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_SESSION_FILE.write_text(json.dumps({
+            "session_id": session_id,
+            "used_at": datetime.now().isoformat(),
+        }))
+    except Exception:
+        pass
 
 import typer
 from rich.console import Console
@@ -84,6 +116,7 @@ def ask(
         ),
         stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream the response"),
         session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID for memory"),
+        new_session: bool = typer.Option(False, "--new", "-n", help="Force a new session (don't resume last)"),
         no_memory: bool = typer.Option(False, "--no-memory", help="Disable memory for this query"),
 ):
     """Ask Seraphim a question."""
@@ -95,7 +128,12 @@ def ask(
         from seraphim.engine import get_engine
         from seraphim.memory.store import init_db, load_history, save_message
 
-        sess = session or str(uuid.uuid4())[:8]
+        if session:
+            sess = session
+        elif new_session or no_memory:
+            sess = str(uuid.uuid4())[:8]
+        else:
+            sess = _load_last_session() or str(uuid.uuid4())[:8]
 
         # Choix de l'engine_id:
         engine_id: Optional[str] = engine
@@ -199,6 +237,9 @@ def ask(
         if not no_memory:
             await save_message(sess, "user", query, agent)
             await save_message(sess, "assistant", full_response, agent)
+            from seraphim.memory.store import trim_session_if_needed
+            await trim_session_if_needed(sess)
+            _save_last_session(sess)
 
     _run(_ask())
 
@@ -208,6 +249,9 @@ def history(
         session: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID to display"),
         list_all: bool = typer.Option(False, "--list", "-l", help="List all sessions"),
         delete: Optional[str] = typer.Option(None, "--delete", "-d", help="Delete a session"),
+        prune: bool = typer.Option(False, "--prune", help="Remove sessions older than 90 days and keep at most 500"),
+        prune_days: int = typer.Option(90, "--prune-days", help="Max session age in days (with --prune)"),
+        prune_max: int = typer.Option(500, "--prune-max", help="Max total sessions to keep (with --prune)"),
 ):
     """Browse or manage conversation history."""
 
@@ -215,6 +259,15 @@ def history(
         from seraphim.memory.store import init_db, load_history, list_sessions, delete_session
 
         await init_db()
+
+        if prune:
+            from seraphim.memory.store import prune_old_sessions
+            result = await prune_old_sessions(max_age_days=prune_days, max_total_sessions=prune_max)
+            console.print(
+                f"[green]✓[/green] Pruned [bold]{result['deleted_sessions']}[/bold] sessions "
+                f"([bold]{result['deleted_messages']}[/bold] messages removed)."
+            )
+            return
 
         if delete:
             await delete_session(delete)
