@@ -154,9 +154,56 @@ def _resolve_folder(name: str) -> str:
     return str(home / original)
 
 
+# do_text refers to LLM-generated content → skip direct dispatch
+_GENERATED_CONTENT_RE = re.compile(
+    r"(?:"
+    r"\b(?:le|ton|ce)\s+code\b|"               # "le code", "ton code", "ce code"
+    r"\bça\b|"                                   # "ça" (standalone pronoun)
+    r"\bce\s+que\s+tu\b|"                        # "ce que tu (as généré/écrit…)"
+    r"\bque\s+tu\s+(?:viens\s+de|as)\b|"         # "que tu viens de", "que tu as"
+    r"\b(?:ton|ce)\s+(?:résultat|script|programme)\b|"
+    r"\bla\s+r[eé]ponse\b"                        # "la réponse"
+    r")",
+    re.I,
+)
+
+
+def _build_open_do(app: str, do_text: str) -> tuple[str, dict]:
+    """Parse 'ouvre APP et DO_TEXT' → (skill_name, kwargs) for app_manager/interact.
+
+    Returns ("__llm__", {}) when do_text references AI-generated content so the
+    caller can fall through to the LLM instead of dispatching directly.
+    """
+    if _GENERATED_CONTENT_RE.search(do_text):
+        return ("__llm__", {})
+    try:
+        from seraphim.skills.system.apps import (
+            _resolve_app, _APP_PROFILES, _proc_name, parse_interaction, _ARTICLE_RE
+        )
+        clean_app = _ARTICLE_RE.sub("", app).strip()  # strip "le terminal" → "terminal"
+        exe = _resolve_app(clean_app) or clean_app
+        safe_exe = _proc_name(exe)
+        profile = _APP_PROFILES.get(safe_exe, _APP_PROFILES.get(exe.lower(), {}))
+        interaction = parse_interaction(do_text, profile)
+    except Exception:
+        clean_app = app
+        interaction = {}
+    kwargs: dict = {"action": "interact", "app": clean_app}
+    kwargs.update(interaction)
+    return ("app_manager", kwargs)
+
+
 DIRECT_PATTERNS = [
-    (re.compile(r"(?:ouvre|lance|démarre|open|start)\s+(\w+)", re.I),
-     lambda m: ("open_app", {"app": m.group(1)})),
+    # "ouvre Chrome et va sur youtube.com" / "lance Notepad et écris Bonjour"
+    (re.compile(
+        r"(?:ouvre|lance|démarre|open|start)\s+([\w][^!?\n]+?)"
+        r"\s+et\s+(.+?)(?:[!?]|\s*$)",  # pas de . comme terminateur — préserve les URLs
+        re.I,
+     ),
+     lambda m: _build_open_do(m.group(1).strip(), m.group(2).strip())),
+    # Simple open without action
+    (re.compile(r"(?:ouvre|lance|démarre|open|start)\s+([\w\s]+?)(?:\s*[!?.]|\s*$)", re.I),
+     lambda m: ("app_manager", {"action": "open", "app": m.group(1).strip()})),
     (re.compile(r"(?:volume|son)\s+(?:à|a|=)?\s*(\d+)", re.I),
      lambda m: ("set_volume", {"level": int(m.group(1))})),
     (re.compile(r"(?:monte|augmente)\s+le\s+(?:volume|son)", re.I),
@@ -297,14 +344,14 @@ _NETINFO_RE = re.compile(
 _APPLIST_RE = re.compile(
     r"(?:"
     # requête ultra-courte : juste "applications ?" / "logiciels ?" / "apps ?"
-    r"^(?:applications?|logiciels?|programmes?|apps?|software)\s*[?!.]?\s*$|"
+    r"^(?:applications?|logiciels?|programmes?|software)\s*[?!.]?\s*$|"
     r"\b(?:"
     r"(?:(?:applications?|logiciels?|programmes?|apps?)\s+install[eé]e?s?)|"
     r"(?:install[eé]e?s?\s+(?:applications?|logiciels?|programmes?|apps?))|"
     r"(?:installed\s+(?:apps?|software|programs?))|"
-    r"(?:liste(?:r)?\s+(?:les\s+)?(?:applications?|logiciels?|programmes?|apps?)(?:\s+install[eé]e?s?)?)|"
-    r"(?:quel(?:le)?s?\s+(?:sont\s+(?:les\s+)?)?(?:logiciels?|programmes?|applications?|apps?)(?:\s+install[eé]e?s?)?)|"
-    r"(?:tou(?:te)?s?\s+(?:(?:les|mes|tes|vos)\s+)?(?:logiciels?|programmes?|applications?|apps?)(?:\s+install[eé]e?s?)?)"
+    r"(?:liste(?:r)?\s+(?:les\s+)?(?:applications?|logiciels?|programmes?|apps?)\s+install[eé]e?s?)|"
+    r"(?:quel(?:le)?s?\s+(?:sont\s+(?:les\s+)?)?(?:logiciels?|programmes?)\s*(?:install[eé]e?s?)?)|"
+    r"(?:tou(?:te)?s?\s+(?:(?:les|mes|tes|vos)\s+)?(?:logiciels?|programmes?|applications?|apps?)\s+install[eé]e?s?)"
     r")\b"
     r")",
     re.I,
@@ -317,6 +364,62 @@ _APP_CHECK_RE = re.compile(
     r"(.+?)\s+est[-\s]il\s+install[eé]e?s?|"
     r"(?:tu\s+as|as[-\s]tu)\s+(.+?)\s+(?:d')?install[eé]e?s?"
     r")\s*[?!.]?\s*$",
+    re.I,
+)
+
+# ── app_manager — apps en cours d'exécution (GUI) ────────────────────────────
+
+# "quelles apps sont ouvertes", "apps actives", "fenêtres ouvertes"
+_APP_RUNNING_RE = re.compile(
+    r"\b(?:"
+    r"(?:quell?es?\s+(?:apps?|applications?|fenêtres?|programmes?)\s+(?:sont\s+)?(?:ouvertes?|actives?|lancées?|en\s+cours))|"
+    r"(?:(?:apps?|applications?|fenêtres?)\s+(?:ouvertes?|actives?|lancées?|(?:en\s+)?cours))|"
+    r"(?:(?:liste|montre|affiche)\s+(?:les\s+)?(?:apps?|applications?)\s+(?:ouvertes?|actives?|lancées?|(?:en\s+)?cours))|"
+    r"(?:(?:apps?|applications?)\s+(?:qui\s+)?(?:tournent|sont\s+(?:ouvertes?|actives?|lancées?)))"
+    r")\b",
+    re.I,
+)
+
+# "fais un code python et copie le sur vscode" / "génère un script et ouvre dans vscode"
+# → route to CoderAgent which already generates + saves + opens VS Code
+_CODE_TO_VSCODE_RE = re.compile(
+    r"(?:fais?|génère?|crée?|écri[st]?|write|generate|create)\s+"
+    r"(?:(?:moi|lui|nous)\s+)?(?:un[e]?\s+)?(?:code?|script|programme?|class[e]?|fonction?|module?)"
+    r".*?"
+    r"\b(?:vscode|vs[-\s]?code|visual\s+studio(?:\s+code)?|dans\s+(?:le\s+)?(?:vs)?code)\b",
+    re.I | re.S,
+)
+
+# "est-ce que Discord tourne", "Discord est-il lancé ?", "Discord tourne ?"
+_APP_STATUS_RE = re.compile(
+    r"(?:"
+    r"est[-\s]ce\s+que\s+([\w\s]+?)\s+(?:tourne|est\s+(?:ouvert|actif|lancé|démarré|en\s+cours))|"
+    r"([\w]+)\s+(?:tourne[-\s]t[-\s]il|est[-\s](?:il\s+)?(?:ouvert|actif|lancé|démarré))|"
+    r"([\w]+)\s+(?:tourne|est\s+(?:actif|lancé|ouvert))\s*[?!.]?\s*$"
+    r")",
+    re.I,
+)
+
+# "ferme Chrome", "quitte Discord", "kill Zoom", "arrête Spotify"
+_APP_CLOSE_RE = re.compile(
+    r"(?:ferme[rz]?|ferm[eo]n[sz]|close|quitt[eo][rz]?|arr[eê]te[rz]?|stop(?:pe)?|kill|tuer?|tue)\s+([\w\s]+?)(?:\s*[!?.]|\s*$)",
+    re.I,
+)
+
+# "copie ce script dans vscode" / "colle ça dans vscode" / "mets le code dans vs code"
+_COPY_TO_VSCODE_RE = re.compile(
+    r"(?:copie[rz]?|colle[rz]?|mets?|place[rz]?|envoie[rz]?|transfere[rz]?|copy|paste|put|send|ouvre?)\s+"
+    r"(?:(?:le|ce|ça|cela|ton|ce\s+code|ce\s+script|le\s+code|le\s+script|la\s+réponse|ça)\s+)?"
+    r"(?:dans?\s+|sur\s+|(?:dans|en)\s+)?(?:vscode|vs[-\s]?code|visual\s+studio(?:\s+code)?)",
+    re.I,
+)
+
+# "mets VS Code au premier plan", "focus Discord", "passe Chrome devant"
+_APP_FOCUS_RE = re.compile(
+    r"(?:"
+    r"(?:mets?|passe[rz]?|amène[rz]?|bring|focus|switch\s+to)\s+([\w\s]+?)\s+(?:au\s+premier\s+plan|en\s+(?:avant|premier)|devant|to\s+(?:the\s+)?(?:front|foreground))|"
+    r"(?:focus|premier\s+plan|foreground)\s+(?:sur\s+)?([\w]+)"
+    r")",
     re.I,
 )
 
@@ -334,6 +437,48 @@ def _sysinfo_section(query: str) -> str:
     if any(x in q for x in ["windows", "version", " os "]):
         return "os"
     return "all"
+
+
+def _copy_code_to_vscode(context) -> str:
+    """Find the most recent code block (pending or in context) and open it in VS Code."""
+    global _pending_code, _pending_file
+
+    code: str | None = None
+    fpath: str | None = None
+
+    # 1. Code saved by CoderAgent or a previous ChatAgent response
+    if _pending_code and _pending_file and Path(_pending_file).exists():
+        code = _pending_code
+        fpath = _pending_file
+
+    # 2. Scan conversation history for a code block in the last assistant message
+    if code is None and context is not None:
+        msgs = getattr(context, "messages", [])
+        for msg in reversed(msgs):
+            if msg.get("role") == "assistant":
+                cm = re.search(r"```(?:python|py)?\n(.*?)\n```", msg.get("content", ""), re.DOTALL)
+                if cm:
+                    code = cm.group(1).strip()
+                    break
+
+    if not code:
+        return "Je n'ai pas trouvé de code récent. Génère d'abord un script (ex: 'fais un code python...')."
+
+    # Save to workspace if we don't have a file yet
+    if fpath is None or not Path(fpath).exists():
+        workspace = Path.home() / "seraphim_workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime as _dt
+        fpath = str(workspace / f"seraphim_{_dt.now().strftime('%H%M%S')}.py")
+        Path(fpath).write_text(code, encoding="utf-8")
+        _pending_code = code
+        _pending_file = fpath
+
+    try:
+        subprocess.Popen(f'code "{fpath}"', shell=True)
+        return f"✓ Code ouvert dans VS Code : `{Path(fpath).name}`\n\n```python\n{code}\n```"
+    except Exception as e:
+        return f"Erreur ouverture VS Code : {e}"
 
 
 async def _inject_clipboard(query: str) -> str:
@@ -573,6 +718,9 @@ class ChatAgent(BaseAgent):
             except Exception as _e:
                 return f"Erreur skill '{_skill_name}': {_e}"
 
+        if _COPY_TO_VSCODE_RE.search(query):
+            return _copy_code_to_vscode(context)
+
         expr = _extract_math_expr(query)
         if expr:
             skill = SKILL_REGISTRY.get("calculator")
@@ -644,6 +792,43 @@ class ChatAgent(BaseAgent):
                 result = await skill.run()
                 return result.output if result.success else f"Erreur réseau: {result.error}"
 
+        # ── app_manager: apps en cours d'exécution ───────────────────────────
+        if _APP_RUNNING_RE.search(query):
+            skill = SKILL_REGISTRY.get("app_manager")
+            if skill:
+                result = await skill.run(action="list_running")
+                return result.output if result.success else f"Erreur: {result.error}"
+
+        m_status = _APP_STATUS_RE.search(query)
+        if m_status:
+            app_name = next((g for g in m_status.groups() if g), "").strip()
+            _ignore = {"", "il", "elle", "le", "la", "les", "un", "une"}
+            if app_name and app_name.lower() not in _ignore and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="status", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        m_close = _APP_CLOSE_RE.search(query)
+        if m_close:
+            app_name = m_close.group(1).strip()
+            _sys_protected = {"le pc", "l'ordi", "windows", "le système", "l ordinateur"}
+            if app_name and app_name.lower() not in _sys_protected and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="close", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        m_focus = _APP_FOCUS_RE.search(query)
+        if m_focus:
+            app_name = next((g for g in m_focus.groups() if g), "").strip()
+            if app_name and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="focus", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        # ── installed_apps: vérification + liste ─────────────────────────────
         m = _APP_CHECK_RE.search(query)
         if m:
             app_name = next((g for g in m.groups() if g), "").strip()
@@ -672,10 +857,15 @@ class ChatAgent(BaseAgent):
                 result = await skill.run(limit=200)
                 return result.output if result.success else f"Erreur applications: {result.error}"
 
+        if _CODE_TO_VSCODE_RE.search(query):
+            return await CoderAgent().run(query, context)
+
         for pattern, builder in DIRECT_PATTERNS:
             m = pattern.search(query)
             if m:
                 skill_name, kwargs = builder(m)
+                if skill_name == "__llm__":
+                    break  # do_text references generated content → fall through to LLM
                 skill = SKILL_REGISTRY.get(skill_name)
                 if skill:
                     result = await skill.run(**kwargs)
@@ -699,6 +889,16 @@ class ChatAgent(BaseAgent):
         # Self-correct if the response contains Python code with syntax errors
         from seraphim.agents.verification import self_correct_code
         response = await self_correct_code(self, query, response, ctx)
+        # Save any code block so "copie dans vscode" can pick it up next turn
+        _cm = re.search(r"```(?:python|py)?\n(.*?)\n```", response, re.DOTALL)
+        if _cm:
+            global _pending_code, _pending_file
+            _pending_code = _cm.group(1).strip()
+            _ws = Path.home() / "seraphim_workspace"
+            _ws.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime as _dt
+            _pending_file = str(_ws / f"seraphim_{_dt.now().strftime('%H%M%S')}.py")
+            Path(_pending_file).write_text(_pending_code, encoding="utf-8")
         return response
 
     async def stream(self, query: str, context: AgentContext | None = None):
@@ -1019,7 +1219,10 @@ class ReActAgent(BaseAgent):
         _BROWSER_KW = re.compile(
             r"\b(navigateur|browser|chrome|edge|firefox|bing)\b", re.I
         )
-        if _BROWSER_KW.search(query):
+        # Open/launch commands must NOT be redirected to browser_search even if they
+        # name a browser ("ouvre Chrome", "lance Firefox et va sur...").
+        _is_open_cmd = bool(re.match(r"(?:ouvre|lance|démarre|open|start)\s+", query, re.I))
+        if _BROWSER_KW.search(query) and not _is_open_cmd:
             bm = _BROWSER_SEARCH_RE.search(query)
             search_query = (bm.group(1) or bm.group(2) or "").strip() if bm else query
             # Extract after colon if present: "cherche : python 3.13 news"
@@ -1107,6 +1310,43 @@ class ReActAgent(BaseAgent):
                 result = await skill.run()
                 return result.output if result.success else f"Erreur réseau: {result.error}"
 
+        # ── app_manager: apps en cours d'exécution ───────────────────────────
+        if _APP_RUNNING_RE.search(query):
+            skill = SKILL_REGISTRY.get("app_manager")
+            if skill:
+                result = await skill.run(action="list_running")
+                return result.output if result.success else f"Erreur: {result.error}"
+
+        m_status = _APP_STATUS_RE.search(query)
+        if m_status:
+            app_name = next((g for g in m_status.groups() if g), "").strip()
+            _ignore = {"", "il", "elle", "le", "la", "les", "un", "une"}
+            if app_name and app_name.lower() not in _ignore and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="status", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        m_close = _APP_CLOSE_RE.search(query)
+        if m_close:
+            app_name = m_close.group(1).strip()
+            _sys_protected = {"le pc", "l'ordi", "windows", "le système", "l ordinateur"}
+            if app_name and app_name.lower() not in _sys_protected and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="close", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        m_focus = _APP_FOCUS_RE.search(query)
+        if m_focus:
+            app_name = next((g for g in m_focus.groups() if g), "").strip()
+            if app_name and 1 < len(app_name) < 40:
+                skill = SKILL_REGISTRY.get("app_manager")
+                if skill:
+                    result = await skill.run(action="focus", app=app_name)
+                    return result.output if result.success else f"Erreur: {result.error}"
+
+        # ── installed_apps: vérification + liste ─────────────────────────────
         m = _APP_CHECK_RE.search(query)
         if m:
             app_name = next((g for g in m.groups() if g), "").strip()
@@ -1135,16 +1375,24 @@ class ReActAgent(BaseAgent):
                 result = await skill.run(limit=200)
                 return result.output if result.success else f"Erreur applications: {result.error}"
 
-        # Skip web_search DIRECT_PATTERN if browser keyword present
-        _skip_web_direct = bool(_BROWSER_KW.search(query))
+        if _COPY_TO_VSCODE_RE.search(query):
+            return _copy_code_to_vscode(context)
+
+        if _CODE_TO_VSCODE_RE.search(query):
+            return await CoderAgent().run(query, context)
+
+        # Skip web_search DIRECT_PATTERN if browser keyword present (but not for open cmds)
+        _skip_web_direct = bool(_BROWSER_KW.search(query) and not _is_open_cmd)
         if not _skip_web_direct:
             for pattern, builder in DIRECT_PATTERNS:
                 m = pattern.search(query)
                 if m:
                     skill_name, kwargs = builder(m)
+                    if skill_name == "__llm__":
+                        break  # do_text references generated content → fall through to LLM
                     skill = SKILL_REGISTRY.get(skill_name)
                     if not skill:
-                        return f"Skill '{skill_name}' non trouvé."
+                        continue  # skill not found → try next pattern
                     try:
                         result = await skill.run(**kwargs)
                         return result.output if result.output else (result.error or "(no output)")
