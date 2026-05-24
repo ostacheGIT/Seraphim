@@ -4,8 +4,11 @@ import os
 os.environ["PYTHONUTF8"] = "1"
 
 import asyncio
+import logging
 import uuid
 from typing import Optional
+
+_log = logging.getLogger("seraphim.cli")
 
 import typer
 from rich.console import Console
@@ -154,8 +157,8 @@ def ask(
                             ag = get_agent(override.agent)
                             if hasattr(ag, "engine_id"):
                                 ag.engine_id = engine_id
-            except Exception:
-                pass
+            except Exception as _e:
+                _log.debug("auto-routing failed: %s", _e)
 
         ctx = AgentContext()
         # SkillAgent gère son propre system prompt dans _run_react — ne pas l'ajouter ici
@@ -175,8 +178,8 @@ def ask(
         try:
             from seraphim.agents.base import _inject_clipboard
             _run_query = await _inject_clipboard(_run_query)
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.debug("clipboard injection failed: %s", _e)
 
         if stream:
             console.print(
