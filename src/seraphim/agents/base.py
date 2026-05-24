@@ -1260,11 +1260,14 @@ class ReActAgent(BaseAgent):
                 _tracer.record_step(skill_name, args, tool_output)
 
                 ctx.messages.append({"role": "assistant", "content": response})
+                # Wrap tool output in fenced block so the LLM treats it as
+                # opaque data, not as further instructions it should obey.
+                _safe_output = str(tool_output)[:4000]
                 if tool_failed:
                     ctx.messages.append({
                         "role": "user",
                         "content": (
-                            f"Tool '{skill_name}' failed: {tool_output}\n\n"
+                            f"Tool '{skill_name}' failed:\n```\n{_safe_output}\n```\n\n"
                             "Try a different approach, different arguments, or a different tool. "
                             "Do NOT repeat the exact same failing call."
                         )
@@ -1273,7 +1276,7 @@ class ReActAgent(BaseAgent):
                     ctx.messages.append({
                         "role": "user",
                         "content": (
-                            f"Tool result ({skill_name}):\n{tool_output}\n\n"
+                            f"Tool result ({skill_name}):\n```\n{_safe_output}\n```\n\n"
                             "Summarize the above result in plain language. "
                             "Do NOT repeat the raw output. Do NOT say ACTION or ARGS. "
                             "Just give a short, clear answer."

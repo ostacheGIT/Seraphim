@@ -131,10 +131,13 @@ def listen_command(
         "stop listening", "stop",
     ]
 
-    while True:
-        try:
+    # Single event loop for the whole session — listen offloaded to thread so
+    # the loop stays free to handle async I/O (streaming, memory, TTS) without
+    # creating/destroying an event loop on every turn.
+    async def _listen_loop():
+        while True:
             console.print("\n[dim cyan]⏳ En écoute…[/dim cyan]", end="")
-            text = listener.listen_and_transcribe()
+            text = await asyncio.to_thread(listener.listen_and_transcribe)
             if not text:
                 console.print(" [dim](silence, on recommence)[/dim]")
                 continue
@@ -146,7 +149,9 @@ def listen_command(
                 console.print("[bold yellow]Seraphim ›[/bold yellow] Bien, j'arrête de vous écouter. À bientôt 👋")
                 break
 
-            asyncio.run(_respond(text))
-        except KeyboardInterrupt:
-            console.print("\n\n[dim]Au revoir 👋[/dim]")
-            break
+            await _respond(text)
+
+    try:
+        asyncio.run(_listen_loop())
+    except KeyboardInterrupt:
+        console.print("\n\n[dim]Au revoir 👋[/dim]")
