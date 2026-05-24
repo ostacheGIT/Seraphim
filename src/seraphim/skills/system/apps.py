@@ -165,8 +165,8 @@ _APP_PROFILES: dict[str, dict] = {
                    "quick_open": "^p", "command_palette": "^+p", "terminal": "^`"},
     "subl":       {"editor": True, "backend": "uia"},
     # Apps spéciales
-    "spotify":    {"backend": "uia"},
-    "discord":    {"backend": "uia"},
+    "spotify":    {"backend": "uia", "search_key": "^l"},   # Ctrl+L ouvre la recherche
+    "discord":    {"backend": "uia", "search_key": "^k"},   # Ctrl+K = Quick Switcher
     "obsidian":   {"editor": True, "backend": "uia"},
     "explorer":   {"backend": "uia"},
 }
@@ -254,6 +254,7 @@ def _pw_interact_win(
     backend: str,
     text: str, url: str, keys: str,
     element_hint: str, send_enter: bool,
+    search_key: str = "",  # app-specific shortcut to open the search box before typing
 ) -> tuple[bool, str]:
     """Core pywinauto interaction on an already-focused window."""
     import time
@@ -269,6 +270,10 @@ def _pw_interact_win(
             return True, f"✓ Navigation vers {url}"
 
         if text:
+            # If the app has a dedicated search shortcut, activate it first
+            if search_key:
+                win.type_keys(search_key, pause=0.05)
+                time.sleep(0.3)
             target = win
             if element_hint:
                 try:
@@ -437,12 +442,17 @@ def parse_interaction(do_text: str, profile: dict) -> dict:
         result["url"] = f"https://{m.group(1).lower()}.com"
         return result
 
-    # 2. Recherche web → Google
+    # 2. Recherche : Google pour les navigateurs, frappe dans l'app pour les autres
     m = _SEARCH_RE.search(do_text)
     if m:
-        import urllib.parse
-        q = urllib.parse.quote_plus(m.group(1).strip())
-        result["url"] = f"https://www.google.com/search?q={q}"
+        term = m.group(1).strip()
+        if profile.get("browser"):
+            import urllib.parse
+            result["url"] = f"https://www.google.com/search?q={urllib.parse.quote_plus(term)}"
+        else:
+            # Spotify, Discord, VS Code, etc. → taper le terme + Entrée dans la barre de recherche
+            result["text"] = term
+            result["send_enter"] = True
         return result
 
     # 3. Raccourci nommé (avant type pour "tape Ctrl+T", "appuie sur Enter"…)
@@ -783,7 +793,8 @@ public class WinFocus {{
                 time.sleep(0.35)
             except Exception:
                 pass
-            return _pw_interact_win(win, backend, text, url, keys, element, send_enter)
+            return _pw_interact_win(win, backend, text, url, keys, element, send_enter,
+                                    search_key=profile.get("search_key", ""))
 
         try:
             pw_ok, pw_out = await asyncio.to_thread(_pw_run)
