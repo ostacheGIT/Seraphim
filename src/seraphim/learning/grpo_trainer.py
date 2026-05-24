@@ -156,31 +156,47 @@ async def run_grpo_sampling(config: GRPOConfig) -> GRPOResult:
     saved_advantages: list[float] = []
     pairs_saved = 0
 
-    for i, (query, agent) in enumerate(prompts):
-        logger.info("[GRPO] prompt %d/%d: '%s…'", i + 1, len(prompts), query[:50])
+    # Process up to 4 prompts concurrently (helps when OLLAMA_NUM_PARALLEL > 1)
+    sem = asyncio.Semaphore(4)
+    n_prompts = len(prompts)
 
-        group = await _sample_group(query, engine, config.num_generations, score_response)
+    async def _process_prompt(
+        idx: int, query: str, agent_name: str
+    ) -> tuple[list[float], list[tuple[str, str, float, float]]]:
+        """Sample group for one prompt. Returns (rewards, to_save) where to_save=(query,response,quality,advantage)."""
+        async with sem:
+            logger.info("[GRPO] prompt %d/%d: '%s…'", idx + 1, n_prompts, query[:50])
+            group = await _sample_group(query, engine, config.num_generations, score_response)
+
         rewards = [r for _, r in group]
         advantages = group_advantages(rewards)
-        all_rewards.extend(rewards)
-
         logger.debug(
             "[GRPO]   rewards=%s  advantages=%s",
             [f"{r:.2f}" for r in rewards],
             [f"{a:+.2f}" for a in advantages],
         )
 
-        # Store above-threshold pairs as high-quality SFT data
-        for (response, reward), advantage in zip(group, advantages):
+        to_save: list[tuple[str, str, float, float]] = []
+        for (response, _reward), advantage in zip(group, advantages):
             if not response or advantage <= config.advantage_threshold:
                 continue
-            # Map advantage to quality score in [0.5, 1.0]
             quality = 0.5 + 0.5 * min(1.0, max(0.0, (advantage + 2.0) / 4.0))
+            to_save.append((query, response, quality, advantage))
+        return rewards, to_save
+
+    batch = await asyncio.gather(*[
+        _process_prompt(i, q, a) for i, (q, a) in enumerate(prompts)
+    ])
+
+    # Sequential saves to avoid concurrent SQLite writes
+    for (query, agent_name), (rewards, to_save) in zip(prompts, batch):
+        all_rewards.extend(rewards)
+        for query_text, response, quality, advantage in to_save:
             trace_id = f"grpo_{uuid.uuid4().hex[:12]}"
             inserted = await save_sft_pair(
                 trace_id=trace_id,
-                agent=agent,
-                instruction=query,
+                agent=agent_name,
+                instruction=query_text,
                 response=response,
                 quality=quality,
             )

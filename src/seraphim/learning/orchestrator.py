@@ -5,6 +5,7 @@ Learning orchestrator — full loop:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,85 @@ class LearningResult:
     grpo_result: dict[str, Any] | None = None
     distill_result: dict[str, Any] | None = None
     finetune_result: dict[str, Any] | None = None
+
+
+async def _optimize_single_agent(
+    agent_name: str,
+    config: "LearningConfig",
+) -> "dict[str, Any] | None":
+    """Optimize one agent: build overlay + eval-before in parallel, then eval-after."""
+    logger.info("Optimizing agent '%s'...", agent_name)
+
+    try:
+        from seraphim.agents.base import get_agent
+        ag = get_agent(agent_name)
+        base_prompt = ag.system_prompt
+    except Exception as e:
+        logger.warning("Could not load agent '%s': %s", agent_name, e)
+        return None
+
+    from seraphim.learning.trace_store import load_sft_pairs
+    pairs = await load_sft_pairs(agent=agent_name, min_quality=config.min_quality, limit=config.min_traces)
+    if len(pairs) < config.min_traces:
+        logger.info("Agent '%s': only %d pairs (need %d), skipping", agent_name, len(pairs), config.min_traces)
+        return None
+
+    # Build overlay and run BEFORE eval concurrently — they're independent
+    logger.info("Building overlay + evaluating '%s' BEFORE (parallel)...", agent_name)
+    overlay, before = await asyncio.gather(
+        build_overlay(
+            target=agent_name,
+            base_system_prompt=base_prompt,
+            min_quality=config.min_quality,
+            max_examples=config.max_examples,
+        ),
+        evaluate_agent(agent_name, config.test_queries, base_prompt),
+    )
+
+    if not overlay:
+        logger.info("Agent '%s': no overlay built", agent_name)
+        return None
+
+    logger.info("Evaluating '%s' AFTER optimization...", agent_name)
+    after = await evaluate_agent(
+        agent_name, config.test_queries, overlay.get("system_prompt", base_prompt)
+    )
+
+    improvement = after["mean_score"] - before["mean_score"]
+    latency_delta = after["mean_latency_ms"] - before["mean_latency_ms"]
+    accept = improvement >= config.min_improvement
+
+    logger.info(
+        "Agent '%s': score %.3f→%.3f (Δ%.3f)  latency %.0f→%.0fms (Δ%+.0f)  tokens_out=%d → %s",
+        agent_name,
+        before["mean_score"], after["mean_score"], improvement,
+        before["mean_latency_ms"], after["mean_latency_ms"], latency_delta,
+        after["total_tokens_out"],
+        "ACCEPT" if accept else "REJECT",
+    )
+
+    if not config.dry_run:
+        await save_overlay(
+            target=agent_name,
+            overlay=overlay,
+            score_before=before["mean_score"],
+            score_after=after["mean_score"],
+            accepted=accept,
+            latency_before_ms=before["mean_latency_ms"],
+            latency_after_ms=after["mean_latency_ms"],
+        )
+
+    return {
+        "agent": agent_name,
+        "overlay": overlay,
+        "score_before": before["mean_score"],
+        "score_after": after["mean_score"],
+        "improvement": improvement,
+        "latency_before_ms": before["mean_latency_ms"],
+        "latency_after_ms": after["mean_latency_ms"],
+        "tokens_out": after["total_tokens_out"],
+        "accepted": accept,
+    }
 
 
 async def run_learning_loop(config: LearningConfig | None = None) -> LearningResult:
@@ -110,96 +190,24 @@ async def run_learning_loop(config: LearningConfig | None = None) -> LearningRes
         logger.info("=== Distillation done === pairs=%d weak=%s",
                     dr.pairs_saved, dr.weak_classes)
 
-    # ── Step 1: Mine SFT pairs ───────────────────────────────────────────────
-    total_mined = 0
-    for agent_name in config.agents:
-        n = await mine(agent=agent_name, min_quality=config.min_quality)
-        total_mined += n
+    # ── Step 1: Mine SFT pairs (all agents in parallel) ─────────────────────
+    mine_counts = await asyncio.gather(*[
+        mine(agent=agent_name, min_quality=config.min_quality)
+        for agent_name in config.agents
+    ])
+    total_mined = sum(mine_counts)
+    for agent_name, n in zip(config.agents, mine_counts):
         logger.info("Mined %d pairs for agent '%s'", n, agent_name)
 
-    # ── Step 2: Optimize + Eval + Accept/Reject ──────────────────────────────
-    overlays_built: list[dict[str, Any]] = []
-    accepted = 0
-    rejected = 0
+    # ── Step 2: Optimize + Eval + Accept/Reject (all agents in parallel) ────
+    opt_results = await asyncio.gather(*[
+        _optimize_single_agent(agent_name, config)
+        for agent_name in config.agents
+    ])
 
-    for agent_name in config.agents:
-        logger.info("Optimizing agent '%s'...", agent_name)
-
-        try:
-            from seraphim.agents.base import get_agent
-            ag = get_agent(agent_name)
-            base_prompt = ag.system_prompt
-        except Exception as e:
-            logger.warning("Could not load agent '%s': %s", agent_name, e)
-            continue
-
-        # Check we have enough good traces
-        from seraphim.learning.trace_store import load_sft_pairs
-        pairs = await load_sft_pairs(agent=agent_name, min_quality=config.min_quality, limit=config.min_traces)
-        if len(pairs) < config.min_traces:
-            logger.info("Agent '%s': only %d pairs (need %d), skipping", agent_name, len(pairs), config.min_traces)
-            continue
-
-        # Build overlay
-        overlay = await build_overlay(
-            target=agent_name,
-            base_system_prompt=base_prompt,
-            min_quality=config.min_quality,
-            max_examples=config.max_examples,
-        )
-        if not overlay:
-            logger.info("Agent '%s': no overlay built", agent_name)
-            continue
-
-        # Eval before
-        logger.info("Evaluating '%s' BEFORE optimization...", agent_name)
-        before = await evaluate_agent(agent_name, config.test_queries, base_prompt)
-
-        # Eval after
-        logger.info("Evaluating '%s' AFTER optimization...", agent_name)
-        after = await evaluate_agent(agent_name, config.test_queries, overlay.get("system_prompt", base_prompt))
-
-        improvement = after["mean_score"] - before["mean_score"]
-        latency_delta = after["mean_latency_ms"] - before["mean_latency_ms"]
-        accept = improvement >= config.min_improvement
-
-        logger.info(
-            "Agent '%s': score %.3f→%.3f (Δ%.3f)  latency %.0f→%.0fms (Δ%+.0f)  tokens_out=%d → %s",
-            agent_name,
-            before["mean_score"], after["mean_score"], improvement,
-            before["mean_latency_ms"], after["mean_latency_ms"], latency_delta,
-            after["total_tokens_out"],
-            "ACCEPT" if accept else "REJECT",
-        )
-
-        record = {
-            "agent": agent_name,
-            "overlay": overlay,
-            "score_before": before["mean_score"],
-            "score_after": after["mean_score"],
-            "improvement": improvement,
-            "latency_before_ms": before["mean_latency_ms"],
-            "latency_after_ms": after["mean_latency_ms"],
-            "tokens_out": after["total_tokens_out"],
-            "accepted": accept,
-        }
-        overlays_built.append(record)
-
-        if not config.dry_run:
-            await save_overlay(
-                target=agent_name,
-                overlay=overlay,
-                score_before=before["mean_score"],
-                score_after=after["mean_score"],
-                accepted=accept,
-                latency_before_ms=before["mean_latency_ms"],
-                latency_after_ms=after["mean_latency_ms"],
-            )
-
-        if accept:
-            accepted += 1
-        else:
-            rejected += 1
+    overlays_built: list[dict[str, Any]] = [r for r in opt_results if r is not None]
+    accepted = sum(1 for r in overlays_built if r["accepted"])
+    rejected = len(overlays_built) - accepted
 
     # ── Step 3: LoRA fine-tuning (optional) ─────────────────────────────────
     finetune_result: dict[str, Any] | None = None
