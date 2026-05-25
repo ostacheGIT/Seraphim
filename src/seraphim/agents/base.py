@@ -617,29 +617,43 @@ _IDENTITY_BLOCK = (
 
 
 def _build_registry_tool_schemas(query: str = "", max_installed: int = 10) -> list[dict]:
-    """Build native tool schemas from SKILL_REGISTRY + top-K relevant installed skills.
+    """Build native tool schemas: Python primitives + bundled TOML skills (always) + top-K user skills.
 
-    Built-in skills always included; installed skills filtered by query relevance so
-    small models (3B) don't choke on a massive tool list.
+    Bundled TOML composite skills are always included regardless of relevance.
+    User-installed skills are filtered by query relevance so small models don't choke.
     """
     schemas = list(get_all_tools())
     seen: set[str] = {s["function"]["name"] for s in schemas}
     try:
-        from seraphim.skills.manager import get_skill_manager
+        from seraphim.skills.manager import get_skill_manager, _BUNDLED_DATA_DIR
         from seraphim.skills.catalog import search_skills
         mgr = get_skill_manager()
         if not len(mgr):
             mgr.discover()
         skill_tools = mgr.get_skill_tools()
-        if query and len(skill_tools) > max_installed:
+
+        bundled_names = {p.stem for p in _BUNDLED_DATA_DIR.glob("*.toml")} if _BUNDLED_DATA_DIR.exists() else set()
+        bundled_tools = [st for st in skill_tools if st.manifest.name in bundled_names]
+        user_tools = [st for st in skill_tools if st.manifest.name not in bundled_names]
+
+        # Bundled composite skills always included (no limit, no relevance filter)
+        for st in bundled_tools:
+            schema = st.to_tool_schema()
+            name = schema["function"]["name"]
+            if name not in seen:
+                schemas.append(schema)
+                seen.add(name)
+
+        # User-installed skills filtered by relevance
+        if query and len(user_tools) > max_installed:
             try:
                 relevant_names = {r["name"] for r in search_skills(query, top_k=max_installed)}
-                skill_tools = [st for st in skill_tools if st.manifest.name in relevant_names]
+                user_tools = [st for st in user_tools if st.manifest.name in relevant_names]
             except Exception:
-                skill_tools = skill_tools[:max_installed]
+                user_tools = user_tools[:max_installed]
         else:
-            skill_tools = skill_tools[:max_installed]
-        for st in skill_tools:
+            user_tools = user_tools[:max_installed]
+        for st in user_tools:
             schema = st.to_tool_schema()
             name = schema["function"]["name"]
             if name not in seen:
@@ -652,6 +666,10 @@ def _build_registry_tool_schemas(query: str = "", max_installed: int = 10) -> li
 
 async def _dispatch_skill_tool_calls(tool_calls: list, query: str) -> str:
     """Execute skills from native LLM function-calling response."""
+    from seraphim.skills.manager import _BUNDLED_DATA_DIR, get_skill_manager
+    from seraphim.skills.executor import SkillExecutor
+    _bundled = {p.stem for p in _BUNDLED_DATA_DIR.glob("*.toml")} if _BUNDLED_DATA_DIR.exists() else set()
+
     results: list[str] = []
     for tc in tool_calls:
         fn = tc.get("function", {})
@@ -665,13 +683,31 @@ async def _dispatch_skill_tool_calls(tool_calls: list, query: str) -> str:
         else:
             args = dict(args_raw)
 
-        if name in SKILL_REGISTRY:
+        if name in _bundled:
+            # Composite TOML skill — run via SkillExecutor pipeline
+            try:
+                mgr = get_skill_manager()
+                if not len(mgr):
+                    mgr.discover()
+                manifest = mgr.get(name)
+                if manifest:
+                    executor = SkillExecutor(SKILL_REGISTRY)
+                    task = args.get("task") or args.get("query") or query
+                    result = await executor.execute(manifest, task, initial_context=args)
+                    results.append(result)
+                else:
+                    results.append(f"Skill '{name}' not found in catalog")
+            except Exception as e:
+                results.append(f"Skill error ({name}): {e}")
+        elif name in SKILL_REGISTRY:
+            # Primitive Python tool — call directly
             try:
                 res = await SKILL_REGISTRY[name].run(**args)
                 results.append(res.output if res.success else f"Error: {res.error}")
             except Exception as e:
                 results.append(f"Skill error ({name}): {e}")
         else:
+            # User-installed skill — run via SkillAgent
             try:
                 sub = SkillAgent(name)
                 task = args.get("task") or args.get("query") or query

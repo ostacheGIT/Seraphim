@@ -27,8 +27,11 @@ class SkillExecutor:
         manifest: SkillManifest,
         query: str,
         skill_resolver: SkillResolverT | None = None,
+        initial_context: dict[str, Any] | None = None,
     ) -> str:
         context: dict[str, Any] = {"query": query}
+        if initial_context:
+            context.update(initial_context)
         last_output = query
 
         for step in manifest.steps:
@@ -62,7 +65,10 @@ class SkillExecutor:
         def _replace(match: re.Match) -> str:
             key = match.group(1)
             val = context.get(key, match.group(0))
-            return json.dumps(val) if not isinstance(val, str) else val
+            if isinstance(val, str):
+                # Escape for JSON string insertion (strips surrounding quotes from json.dumps)
+                return json.dumps(val)[1:-1]
+            return json.dumps(val)
 
         rendered = re.sub(r"\{(\w+)\}", _replace, template)
         try:

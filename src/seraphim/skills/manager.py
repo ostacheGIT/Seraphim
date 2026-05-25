@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _SKILLS_ROOT = Path("~/.seraphim/skills").expanduser()
 _OVERLAY_ROOT = Path("~/.seraphim/learning/skills").expanduser()
+_BUNDLED_DATA_DIR = Path(__file__).parent / "data"
 
 
 class SkillManager:
@@ -39,10 +40,12 @@ class SkillManager:
     def discover(self) -> dict[str, SkillManifest]:
         """Scanne ~/.seraphim/skills/ et charge tous les manifests.
 
-        Priorité: premier trouvé gagne (workspace > indexed > unreviewed).
+        Priorité: user skills > bundled data skills.
         """
         self._manifests.clear()
         self._paths.clear()
+
+        # User skills (highest priority — first-seen wins)
         for skill_dir in self._iter_skill_dirs():
             name = skill_dir.name
             if name in self._manifests:
@@ -55,11 +58,29 @@ class SkillManager:
             except Exception as exc:
                 logger.debug("Skill load failed %s: %s", skill_dir, exc)
 
+        # Bundled skills from skills/data/ (lowest priority — fill gaps only)
+        self._load_bundled()
+
         errors = self.validate_dependency_graph()
         for err in errors:
             logger.warning("Dependency issue: %s", err)
 
         return self._manifests
+
+    def _load_bundled(self) -> None:
+        """Charge les skills bundlés depuis skills/data/ — comblent les lacunes."""
+        if not _BUNDLED_DATA_DIR.exists():
+            return
+        for toml_file in sorted(_BUNDLED_DATA_DIR.glob("*.toml")):
+            try:
+                manifest = self._loader._load_toml(toml_file)
+            except Exception as exc:
+                logger.debug("Bundled skill load failed %s: %s", toml_file, exc)
+                continue
+            if manifest.name in self._manifests:
+                continue  # user skill overrides bundled
+            self._manifests[manifest.name] = manifest
+            self._paths[manifest.name] = toml_file
 
     def _iter_skill_dirs(self) -> Iterator[Path]:
         if not self._root.exists():

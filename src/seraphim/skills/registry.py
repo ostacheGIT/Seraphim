@@ -41,4 +41,6 @@ def get_skill(name: str) -> BaseSkill:
     return SKILL_REGISTRY[name]
 
 def get_all_tools() -> list[dict]:
-    return [s.to_tool() for s in SKILL_REGISTRY.values()]
+    from pathlib import Path
+    _bundled = {p.stem for p in (Path(__file__).parent / "data").glob("*.toml")}
+    return [s.to_tool() for name, s in SKILL_REGISTRY.items() if name not in _bundled]

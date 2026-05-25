@@ -1,0 +1,22 @@
+[skill]
+name = "morning_digest"
+description = "Run the morning digest: current weather, top news headlines, and a daily summary. Use when the user asks for daily news, morning brief, 'quoi de neuf', 'nouvelles du jour', etc."
+version = "0.1.0"
+author = "seraphim"
+required_capabilities = ["network:fetch"]
+tags = ["digest", "news", "weather"]
+
+[[skill.steps]]
+tool_name = "http_request"
+arguments_template = '{"url": "https://wttr.in/{location}?format=3", "method": "GET"}'
+output_key = "weather"
+
+[[skill.steps]]
+tool_name = "web_search"
+arguments_template = '{"query": "top news headlines today"}'
+output_key = "news"
+
+[[skill.steps]]
+tool_name = "think"
+arguments_template = '{"thought": "Compose a concise morning digest.\n\nWeather for {location}: {weather}\n\nTop news: {news}\n\nFormat as a friendly, well-structured morning summary with two sections: Weather and Top News."}'
+output_key = "digest"
