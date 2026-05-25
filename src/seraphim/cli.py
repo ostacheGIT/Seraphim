@@ -435,6 +435,14 @@ app.add_typer(vllm_app, name="vllm")
 from seraphim.connectors.connect_cmd import app as connect_app
 app.add_typer(connect_app, name="connect")
 
+# ── Messaging channels (Telegram, Slack, Webhook) ────────────────────────────────
+from seraphim.channels.channel_cmd import app as channel_app
+app.add_typer(channel_app, name="channel")
+
+# ── Workflow DAG orchestration ────────────────────────────────────────────────────
+from seraphim.workflow.workflow_cmd import app as workflow_app
+app.add_typer(workflow_app, name="workflow")
+
 
 if __name__ == "__main__":
     app()

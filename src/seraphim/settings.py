@@ -90,6 +90,36 @@ class ExternalApiSettings(BaseModel):
     fallback_engine: str = ""  # "openai" | "mistral" | "claude"
 
 
+class TelegramSettings(BaseModel):
+    enabled: bool = False
+    token: SecretStr = SecretStr("")
+    allowed_chat_ids: list[int] = []
+
+
+class SlackSettings(BaseModel):
+    enabled: bool = False
+    bot_token: SecretStr = SecretStr("")
+    channel_id: str = ""
+
+
+class WebhookSettings(BaseModel):
+    enabled: bool = False
+    secret: SecretStr = SecretStr("")
+
+
+class ChannelSettings(BaseModel):
+    telegram: TelegramSettings = TelegramSettings()
+    slack: SlackSettings = SlackSettings()
+    webhook: WebhookSettings = WebhookSettings()
+    auto_start: bool = False
+
+
+class WorkflowSettings(BaseModel):
+    directory: str = "~/.seraphim/workflows"
+    max_parallel: int = 4
+    timeout_secs: float = 300.0
+
+
 class Settings(BaseSettings):
     engine: EngineSettings = EngineSettings()
     server: ServerSettings = ServerSettings()
@@ -97,6 +127,8 @@ class Settings(BaseSettings):
     agents: AgentsSettings = AgentsSettings()
     learning: LearningSettings = LearningSettings()
     external_api: ExternalApiSettings = ExternalApiSettings()
+    channels: ChannelSettings = ChannelSettings()
+    workflow: WorkflowSettings = WorkflowSettings()
     log_level: str = "INFO"
     model_config = {"env_prefix": "SERAPHIM_", "env_nested_delimiter": "__"}
 

@@ -64,6 +64,9 @@ async def lifespan(app: FastAPI):
     from seraphim.memory import create_backend, set_rag_backend
     set_rag_backend(create_backend("sqlite_fts"))
     _maybe_start_daemon()
+    if settings.channels.auto_start:
+        from seraphim.channels.daemon import start_daemon
+        asyncio.create_task(start_daemon())
     yield
 
 
@@ -81,6 +84,10 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Session-Id", "X-Engine-Id", "X-Routed-Agent", "X-Trace-Id"],
 )
+
+if settings.channels.webhook.enabled:
+    from seraphim.channels.webhook import get_fastapi_router as _get_webhook_router
+    app.include_router(_get_webhook_router())
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
