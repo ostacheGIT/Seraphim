@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 // ─── Web Speech API types ─────────────────────────────────────────────────────
 
@@ -163,6 +164,7 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
                 const text = e.results[ri][0].transcript.toLowerCase();
                 if (WAKE_WORDS.some(w => text.includes(w))) {
                     detected = true;
+                    invoke("show_main_window").catch(() => {}); // bring window forward if hidden
                     recog.stop(); // stop cleanly so onend fires normally
                     break;
                 }
