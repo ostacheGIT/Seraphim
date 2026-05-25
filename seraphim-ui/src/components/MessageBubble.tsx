@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { sendFeedback } from "../hooks/useSeraphimBackend";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface MessageBubbleProps {
     message: Message;
@@ -115,6 +116,13 @@ const MD_COMPONENTS = {
         <div className="md-table-wrap"><table className="md-table">{children}</table></div>
     ),
     pre: ({ children }: React.ComponentPropsWithoutRef<"pre">) => <>{children}</>,
+    a({ href, children, ...props }: React.ComponentPropsWithoutRef<"a">) {
+        const handleClick = (e: React.MouseEvent) => {
+            e.preventDefault();
+            if (href) openUrl(href).catch(() => {});
+        };
+        return <a href={href} onClick={handleClick} {...props}>{children}</a>;
+    },
 };
 
 function formatTimestamp(date: Date): string {
