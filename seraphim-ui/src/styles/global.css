@@ -1523,6 +1523,25 @@ canvas[aria-label="Seraphim orb"]:focus-visible {
     border-color: rgba(22,163,74,0.3);
     background: rgba(22,163,74,0.06);
 }
+.wake-word-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+}
+.ww-last-heard {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.04em;
+    color: rgba(120, 220, 140, 0.6);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+[data-theme="light"] .ww-last-heard {
+    color: rgba(22, 163, 74, 0.65);
+}
 
 /* ══════════════════════════════════════════════════════════════
    CODE BLOCK

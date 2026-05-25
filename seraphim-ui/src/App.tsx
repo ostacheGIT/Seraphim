@@ -37,6 +37,7 @@ export default function App() {
         isSpeaking,
         voiceError,
         isWakeWordActive,
+        wakeWordLastHeard,
         whisperAvailable,
         toggleListening,
         toggleWakeWord,
@@ -270,6 +271,7 @@ export default function App() {
             isSpeaking={isSpeaking}
             voiceError={voiceError}
             isWakeWordActive={isWakeWordActive}
+            wakeWordLastHeard={wakeWordLastHeard}
             whisperAvailable={whisperAvailable}
             onSend={sendMessage}
             onVoiceToggle={toggleListening}

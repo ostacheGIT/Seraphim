@@ -39,6 +39,55 @@ const WAKE_WORDS   = [
     "seraph",   "sera fim", "sara",
 ];
 
+// ─── Wake word fuzzy matching ─────────────────────────────────────────────────
+// French STT often splits "séraphim" phonetically into "séra film" (ph → f).
+// We normalize both transcript and wake words before comparing.
+
+function normalizeWW(s: string): string {
+    // NFD splits accented letters into base + combining mark; the mark range is U+0300–U+036F
+    const noDiacritics = s.normalize("NFD").split("").filter(c => {
+        const cp = c.codePointAt(0) ?? 0;
+        return cp < 0x0300 || cp > 0x036F;
+    }).join("");
+    return noDiacritics
+        .toLowerCase()
+        .replace(/ph/g, "f")    // ph → f (séraphim → serafim in French phonetics)
+        .replace(/[^a-z]/g, ""); // letters only — strips spaces and punctuation
+}
+
+function editDistance(a: string, b: string): number {
+    const dp: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+        let prev = dp[0]++;
+        for (let j = 1; j <= b.length; j++) {
+            const next = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(dp[j], dp[j - 1], prev);
+            prev = dp[j];
+            dp[j] = next;
+        }
+    }
+    return dp[b.length];
+}
+
+// Sliding-window approximate match: is `word` contained in `text` within `d` edits?
+function containsApprox(text: string, word: string, d: number): boolean {
+    if (text.includes(word)) return true;
+    const wl = word.length;
+    for (let s = 0; s <= text.length - wl + d; s++) {
+        for (let l = Math.max(1, wl - d); l <= wl + d && s + l <= text.length; l++) {
+            if (editDistance(text.slice(s, s + l), word) <= d) return true;
+        }
+    }
+    return false;
+}
+
+const _WAKE_NORMS = WAKE_WORDS.map(normalizeWW);
+
+function hasWakeWord(rawText: string): boolean {
+    const norm = normalizeWW(rawText);
+    // Allow 1 edit for words > 5 chars (handles "serafilm" ↔ "serafim"), exact for short ones
+    return _WAKE_NORMS.some((w) => containsApprox(norm, w, w.length > 5 ? 1 : 0));
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 interface UseSpeechOptions {
@@ -50,9 +99,10 @@ interface UseSpeechOptions {
 export type SpeechState = "idle" | "listening" | "speaking" | "error";
 
 export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOptions) {
-    const [state,            setState]            = useState<SpeechState>("idle");
-    const [voiceError,       setVoiceError]       = useState<string | null>(null);
-    const [isWakeWordActive, setIsWakeWordActive] = useState(false);
+    const [state,              setState]              = useState<SpeechState>("idle");
+    const [voiceError,         setVoiceError]         = useState<string | null>(null);
+    const [isWakeWordActive,   setIsWakeWordActive]   = useState(false);
+    const [wakeWordLastHeard,  setWakeWordLastHeard]  = useState<string>("");
 
     const onTranscriptRef = useRef(onTranscript);
     const onErrorRef      = useRef(onError);
@@ -151,21 +201,30 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
         if (!SR) return;
 
         const recog = new SR();
-        recog.lang            = lang; // same language as main STT
+        recog.lang            = lang;
         recog.continuous      = false;
-        recog.interimResults  = true;  // fire on partial results — catch word mid-utterance
-        recog.maxAlternatives = 1;
+        recog.interimResults  = true;
+        recog.maxAlternatives = 3; // check multiple hypotheses — STT may mis-transcribe "séraphim"
 
         let detected = false;
 
         recog.onresult = (e: ISpeechRecognitionEvent) => {
             if (detected) return;
             for (let ri = e.resultIndex; ri < e.results.length; ri++) {
-                const text = e.results[ri][0].transcript.toLowerCase();
-                if (WAKE_WORDS.some(w => text.includes(w))) {
+                const result = e.results[ri];
+                // Log all alternatives so you can open DevTools and see the actual transcripts
+                const alts: string[] = [];
+                for (let alt = 0; alt < result.length; alt++) {
+                    alts.push(result[alt].transcript);
+                }
+                const top = alts[0] ?? "";
+                console.log("[WakeWord]", alts.join(" | "), "→ norm:", normalizeWW(top));
+                setWakeWordLastHeard(top);
+
+                if (alts.some(t => hasWakeWord(t))) {
                     detected = true;
-                    invoke("show_main_window").catch(() => {}); // bring window forward if hidden
-                    recog.stop(); // stop cleanly so onend fires normally
+                    invoke("show_main_window").catch(() => {});
+                    recog.stop();
                     break;
                 }
             }
@@ -300,6 +359,7 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
         isSpeaking:       state === "speaking",
         voiceError,
         isWakeWordActive,
+        wakeWordLastHeard,
         whisperAvailable: null as null,
         toggleListening,
         startListening,

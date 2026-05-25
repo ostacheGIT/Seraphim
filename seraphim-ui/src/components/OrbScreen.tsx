@@ -23,6 +23,7 @@ interface OrbScreenProps {
     isSpeaking: boolean;
     voiceError?: string | null;
     isWakeWordActive?: boolean;
+    wakeWordLastHeard?: string;
     whisperAvailable?: boolean | null;
     onSend: (text: string) => void;
     onVoiceToggle: () => void;
@@ -128,6 +129,7 @@ export default function OrbScreen({
     isSpeaking,
     voiceError,
     isWakeWordActive = false,
+    wakeWordLastHeard = "",
     whisperAvailable = null,
     onSend,
     onVoiceToggle,
@@ -853,14 +855,21 @@ export default function OrbScreen({
                     </button>
                 )}
                 {onWakeWordToggle && whisperAvailable !== false && (
-                    <button
-                        className={`wake-word-btn${isWakeWordActive ? " active" : ""}`}
-                        onClick={onWakeWordToggle}
-                        aria-label={isWakeWordActive ? "Désactiver le wake word" : "Activer le wake word"}
-                        title={isWakeWordActive ? "Wake word actif — dites « Seraphim »" : "Activer la détection par mot-clé"}
-                    >
-                        {isWakeWordActive ? "◉" : "○"} wake word
-                    </button>
+                    <div className="wake-word-wrap">
+                        <button
+                            className={`wake-word-btn${isWakeWordActive ? " active" : ""}`}
+                            onClick={onWakeWordToggle}
+                            aria-label={isWakeWordActive ? "Désactiver le wake word" : "Activer le wake word"}
+                            title={isWakeWordActive ? "Wake word actif — dites « Seraphim »" : "Activer la détection par mot-clé"}
+                        >
+                            {isWakeWordActive ? "◉" : "○"} wake word
+                        </button>
+                        {isWakeWordActive && wakeWordLastHeard && (
+                            <span className="ww-last-heard" title="Dernière transcription STT">
+                                « {wakeWordLastHeard} »
+                            </span>
+                        )}
+                    </div>
                 )}
                 <div className="dot-row">
                     <span className={`dot ${orbState === "idle"      ? "active" : ""}`} />
