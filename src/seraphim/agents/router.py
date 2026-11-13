@@ -27,6 +27,22 @@ _MATH_RE = re.compile(
 
 _MATH_FNS = {"sqrt", "sin", "cos", "tan", "log", "abs", "round", "min", "max", "pi"}
 
+# Tâches qui demandent de regarder l'écran et d'agir dessus → agent desktop
+_DESKTOP_RE = re.compile(
+    r"\b(?:"
+    r"(?:double[-\s]?)?clique[rz]?|click|appuie\s+sur|"
+    r"tape\s+(?:dans|sur)|écris\s+dans|remplis|coche[rz]?|décoche[rz]?|sélectionne[rz]?\s+(?:le|la|l['’]|les)|"
+    r"fais\s+défiler|scrolle?|"
+    r"(?:sur|à|de)\s+(?:mon|l['’]|ton)\s*écran|"
+    r"(?:regarde|analyse|lis|vois|décris)\s+(?:mon\s+|l['’]\s*|ce\s+qu['’]il\s+y\s+a\s+(?:sur|à)\s+(?:mon\s+|l['’]\s*))écran|"
+    r"prends?\s+(?:le\s+)?contrôle|"
+    r"dans\s+(?:la|cette)\s+fenêtre|"
+    r"à\s+ma\s+place|"
+    r"utilise\s+(?:la\s+souris|le\s+clavier)"
+    r")",
+    re.I,
+)
+
 _SYSTEM_RE = re.compile(
     r"(?:ouvre|lance|démarre|open|start|volume|son|luminosité|brightness|"
     r"verrouille|lock|éteins?|shutdown|redémarre|restart|sleep|veille|"
@@ -168,6 +184,10 @@ def route(query: str) -> RoutingDecision:
     # 0b. User explicitly correcting a wrong answer → researcher for deeper analysis
     if is_user_correction(q):
         return RoutingDecision(agent="researcher", skill=None, reason="user correction — deeper analysis")
+
+    # 0c. Tâches visuelles (regarder l'écran, cliquer, remplir…) → agent desktop
+    if _DESKTOP_RE.search(q):
+        return RoutingDecision(agent="desktop", skill=None, reason="screen-based desktop task")
 
     # 1. Commandes système directes → react agent (il a les DIRECT_PATTERNS)
     if _SYSTEM_RE.search(q):

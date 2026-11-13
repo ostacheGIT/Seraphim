@@ -120,6 +120,15 @@ class WorkflowSettings(BaseModel):
     timeout_secs: float = 300.0
 
 
+class DesktopSettings(BaseModel):
+    """Agent « desktop » : contrôle du PC par observation de l'écran."""
+    max_steps: int = 15
+    settle_delay: float = 0.8        # pause après chaque action avant de ré-observer (s)
+    vision_model: str = ""           # modèle Ollama de vision optionnel, ex: "qwen2.5vl:3b"
+    confirm_risky: bool = True       # s'arrêter avant supprimer/payer/envoyer non demandés
+    llm_timeout: float = 300.0       # délai max d'une décision du LLM (s) — CPU lent
+
+
 class Settings(BaseSettings):
     engine: EngineSettings = EngineSettings()
     server: ServerSettings = ServerSettings()
@@ -129,6 +138,7 @@ class Settings(BaseSettings):
     external_api: ExternalApiSettings = ExternalApiSettings()
     channels: ChannelSettings = ChannelSettings()
     workflow: WorkflowSettings = WorkflowSettings()
+    desktop: DesktopSettings = DesktopSettings()
     log_level: str = "INFO"
     model_config = {"env_prefix": "SERAPHIM_", "env_nested_delimiter": "__"}
 

@@ -20,6 +20,7 @@ from seraphim.skills.base import BaseSkill, SkillResult
 
 _PS_SCREENSHOT = r"""
 param([string]$OutPath, [int]$X=0, [int]$Y=0, [int]$W=0, [int]$H=0)
+Add-Type -Name DpiU -Namespace SeraphimW -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -ErrorAction SilentlyContinue; [SeraphimW.DpiU]::SetProcessDPIAware() | Out-Null
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -39,24 +40,24 @@ param([string]$ImagePath)
 $null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
 $null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]
-
-function Await($Task) {
-    $methods = [System.WindowsRuntimeSystemExtensions].GetMethods()
-    $asTask  = $methods | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and !$_.IsGenericMethod } | Select-Object -First 1
-    $net = $asTask.Invoke($null, @($Task))
-    $net.Wait(-1) | Out-Null
-    $net.Result
+$null = [Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime]
+# AsTask doit être instancié avec le type du résultat, sinon .Result est vide
+$asTaskG = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+  $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+function AwaitT($Op, $Type) {
+  $t = $asTaskG.MakeGenericMethod($Type).Invoke($null, @($Op)); $t.Wait(-1) | Out-Null; $t.Result
 }
-
 $absPath = (Resolve-Path $ImagePath).Path
-$file    = Await([Windows.Storage.StorageFile]::GetFileFromPathAsync($absPath))
-$stream  = Await($file.OpenAsync([Windows.Storage.FileAccessMode]::Read))
-$decoder = Await([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
-$bitmap  = Await($decoder.GetSoftwareBitmapAsync())
+$file    = AwaitT ([Windows.Storage.StorageFile]::GetFileFromPathAsync($absPath)) ([Windows.Storage.StorageFile])
+$stream  = AwaitT ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = AwaitT ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap  = AwaitT ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if ($null -eq $engine) { Write-Error "WinRT OCR engine not available"; exit 1 }
-$result  = Await($engine.RecognizeAsync($bitmap))
-Write-Output $result.Text
+$result  = AwaitT ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$stream.Dispose()
+Write-Output (($result.Lines | ForEach-Object { $_.Text }) -join "`n")
 """
 
 

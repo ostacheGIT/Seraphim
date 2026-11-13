@@ -188,8 +188,16 @@ def _resolve_app(name: str) -> str | None:
     return None
 
 
+# Exécutables-lanceurs dont le vrai processus porte un autre nom (apps UWP Windows 11)
+_PROC_ALIASES: dict[str, str] = {
+    "calc":          "CalculatorApp",
+    "snippingtool":  "SnippingTool",
+}
+
+
 def _proc_name(exe: str) -> str:
-    return exe.replace(".exe", "").replace(".EXE", "")
+    name = exe.replace(".exe", "").replace(".EXE", "")
+    return _PROC_ALIASES.get(name.lower(), name)
 
 
 # ── pywinauto helpers (sync, run in thread) ───────────────────────────────────

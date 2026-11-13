@@ -393,16 +393,16 @@ _CODE_TO_VSCODE_RE = re.compile(
 # "est-ce que Discord tourne", "Discord est-il lancé ?", "Discord tourne ?"
 _APP_STATUS_RE = re.compile(
     r"(?:"
-    r"est[-\s]ce\s+que\s+([\w\s]+?)\s+(?:tourne|est\s+(?:ouvert|actif|lancé|démarré|en\s+cours))|"
-    r"([\w]+)\s+(?:tourne[-\s]t[-\s]il|est[-\s](?:il\s+)?(?:ouvert|actif|lancé|démarré))|"
-    r"([\w]+)\s+(?:tourne|est\s+(?:actif|lancé|ouvert))\s*[?!.]?\s*$"
+    r"est[-\s]ce\s+que\s+([\w\s+-]+?)\s+(?:tourne|est\s+(?:ouvert|actif|lancé|démarré|en\s+cours))|"
+    r"([\w+-]+)\s+(?:tourne[-\s]t[-\s]il|est[-\s](?:il\s+)?(?:ouvert|actif|lancé|démarré))|"
+    r"([\w+-]+)\s+(?:tourne|est\s+(?:actif|lancé|ouvert))\s*[?!.]?\s*$"
     r")",
     re.I,
 )
 
 # "ferme Chrome", "quitte Discord", "kill Zoom", "arrête Spotify"
 _APP_CLOSE_RE = re.compile(
-    r"(?:ferme[rz]?|ferm[eo]n[sz]|close|quitt[eo][rz]?|arr[eê]te[rz]?|stop(?:pe)?|kill|tuer?|tue)\s+([\w\s]+?)(?:\s*[!?.]|\s*$)",
+    r"(?:ferme[rz]?|ferm[eo]n[sz]|close|quitt[eo][rz]?|arr[eê]te[rz]?|stop(?:pe)?|kill|tuer?|tue)\s+([\w\s+-]+?)(?:\s*[!?.]|\s*$)",
     re.I,
 )
 
@@ -417,8 +417,8 @@ _COPY_TO_VSCODE_RE = re.compile(
 # "mets VS Code au premier plan", "focus Discord", "passe Chrome devant"
 _APP_FOCUS_RE = re.compile(
     r"(?:"
-    r"(?:mets?|passe[rz]?|amène[rz]?|bring|focus|switch\s+to)\s+([\w\s]+?)\s+(?:au\s+premier\s+plan|en\s+(?:avant|premier)|devant|to\s+(?:the\s+)?(?:front|foreground))|"
-    r"(?:focus|premier\s+plan|foreground)\s+(?:sur\s+)?([\w]+)"
+    r"(?:mets?|passe[rz]?|amène[rz]?|bring|focus|switch\s+to)\s+([\w\s+-]+?)\s+(?:au\s+premier\s+plan|en\s+(?:avant|premier)|devant|to\s+(?:the\s+)?(?:front|foreground))|"
+    r"(?:focus|premier\s+plan|foreground)\s+(?:sur\s+)?([\w+-]+)"
     r")",
     re.I,
 )
@@ -2312,6 +2312,10 @@ AGENT_REGISTRY: dict[str, type[BaseAgent]] = {
     "react":      ReActAgent,
     "skill":      SkillAgent,
 }
+
+from seraphim.agents.desktop import DesktopAgent  # noqa: E402
+
+AGENT_REGISTRY["desktop"] = DesktopAgent
 
 def get_agent(name: str) -> BaseAgent:
     if name.startswith("skill:"):
