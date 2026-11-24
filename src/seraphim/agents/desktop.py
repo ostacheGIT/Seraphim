@@ -11,18 +11,19 @@ Deux modes, choisis par le CODE (pas par le modèle) :
     Aucune action souris/clavier n'est possible dans ce mode.
 
   Mode action — ordre explicite (« clique sur… », « ouvre… ») ou proposition validée :
-    boucle observer → décider → agir :
-      1. observe()  : fenêtre cible + éléments numérotés (UI Automation)
-      2. vision     : capture où les éléments sont encadrés et numérotés, envoyée au
-                      modèle de vision qui choisit UNE action en JSON.
-                      Sans modèle de vision : mode texte (UIA + OCR) avec le modèle principal.
-      3. exécution  : pywinauto (SendInput), puis on ré-observe pour vérifier l'effet
+    - ordre simple (« clique sur X ») : trouvé et activé directement, sans modèle ;
+    - sinon : le modèle texte écrit un PLAN en commandes simples, une par ligne
+      (clique sur / clic droit sur / ouvre / écris / touche / lance / cherche / fini…),
+      à partir de l'écran actuel (UI Automation + OCR). Le code exécute chaque étape
+      avec le moteur générique desktop/activate.py et vérifie qu'elle a marché ;
+      au premier échec, il regarde l'écran et demande un nouveau plan.
 
 Sécurité :
   - arrêt d'urgence : placer la souris dans le coin supérieur gauche de l'écran
-  - nombre d'étapes limité (settings.desktop.max_steps)
-  - arrêt avant un clic/une saisie « supprimer / payer / envoyer… » non demandé
-  - détection des boucles (même action répétée)
+  - nombre d'étapes et de replanifications limité (settings.desktop)
+  - arrêt avant un clic/une touche « supprimer / payer / envoyer… » non demandé
+  - « lance » refuse les enchaînements et commandes destructrices
+  - une étape qui échoue deux fois doit être remplacée par une autre approche
 """
 
 from __future__ import annotations
@@ -38,69 +39,6 @@ from dataclasses import dataclass
 from seraphim.agents.core import AgentContext, BaseAgent
 
 logger = logging.getLogger(__name__)
-
-ACTIONS = [
-    "click_on", "open_item",
-    "click", "double_click", "right_click", "click_at", "type", "key", "scroll",
-    "open_app", "focus_window", "wait", "read_screen", "describe_screen",
-    "done", "fail",
-]
-_INPUT_ACTIONS = {"click_on", "open_item", "click", "double_click", "right_click", "click_at",
-                  "type", "key", "scroll"}
-
-DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "thought": {"type": "string"},
-        "action": {"type": "string", "enum": ACTIONS},
-        "target": {"type": "integer"},
-        "x": {"type": "integer"},
-        "y": {"type": "integer"},
-        "text": {"type": "string"},
-    },
-    "required": ["thought", "action"],
-}
-
-_ACTIONS_DOC = """click_on (text) — trouve n'importe où à l'écran (toute fenêtre, barre des tâches, bureau) ce qui affiche le texte text et clique dessus
-open_item (text) — trouve et OUVRE ce qui affiche le texte text : fichier, dossier, lien, icône, application…
-click / double_click / right_click (target) — clic sur l'élément [id]
-{click_at}type (text, target facultatif) — écrit le texte, après un clic sur target si donné
-key (text) — raccourci : "enter", "ctrl+l", "alt+tab", "ctrl+a, delete"
-scroll (text = "up" ou "down", target facultatif)
-open_app (text) — lance une application, ex "chrome"
-focus_window (text) — active la fenêtre dont le titre contient text
-wait — attendre un chargement
-read_screen — lire tout le texte de l'écran (OCR){describe}
-done (text) — tâche finie ; text = ce que tu as fait, en français
-fail (text) — impossible ; text = pourquoi"""
-
-_RULES = """Règles : une action par réponse ; uniquement des [id] de la liste actuelle ; vérifie l'effet de l'action précédente ;
-ne répète pas une action sans effet ; site web = focus du navigateur puis key "ctrl+l", type l'adresse, key "enter" ;
-jamais supprimer/payer/envoyer sans demande explicite ; done dès que c'est fini.
-Pour cliquer ou ouvrir une chose visible, préfère click_on / open_item avec son texte exact tel qu'affiché."""
-
-_CLICK_AT_DOC = ("click_at (x, y, text) — clic à la position (x, y) en pixels de la capture, "
-                 "si la cible n'a pas de numéro ; text = ce que tu cliques\n")
-_DESCRIBE_DOC = "\ndescribe_screen (text = question) — analyse visuelle (lent)"
-
-SYSTEM_PROMPT_VISION = f"""Tu es Seraphim et tu utilises le PC Windows de l'utilisateur à la souris et au clavier pour exécuter sa demande.
-Tu reçois la demande, tes actions précédentes, la liste des éléments « [id] Type nom » et une capture de la fenêtre où ces éléments sont encadrés en rose avec leur numéro.
-Regarde la capture pour savoir où tu en es.
-Réponds UNIQUEMENT en JSON : {{"thought": "...", "action": "...", ...}} — thought en 15 mots maximum.
-
-Actions :
-{_ACTIONS_DOC.format(click_at=_CLICK_AT_DOC, describe="")}
-
-{_RULES} Préfère un [id] à click_at ; pour click_at, donne toujours x et y."""
-
-SYSTEM_PROMPT = f"""Tu es Seraphim et tu utilises le PC Windows de l'utilisateur à la souris et au clavier pour exécuter sa demande.
-Tu reçois la demande, tes actions précédentes et l'écran actuel : fenêtre active, autres fenêtres, éléments « [id] Type nom ».
-Réponds UNIQUEMENT en JSON : {{"thought": "...", "action": "...", "target": id, "text": "..."}} — thought en 15 mots maximum.
-
-Actions :
-{_ACTIONS_DOC.format(click_at="", describe=_DESCRIBE_DOC)}
-
-{_RULES}"""
 
 LOOK_PROMPT = """Tu es Seraphim, l'assistant de l'utilisateur. Tu vois son écran : {source}.
 Réponds à sa demande en français, de façon concise et factuelle, en t'appuyant sur ce que tu vois réellement.
@@ -183,6 +121,8 @@ _SIMPLE_ORDER_RE = re.compile(
     r"\s+(?:sur\s+|dans\s+|on\s+)?(?P<target>.+?)\s*[.!?]*\s*$",
     re.I,
 )
+# « clique sur l'icône du disque D pour ouvrir ses propriétés » : un but, donc un plan
+_PURPOSE_RE = re.compile(r"\b(?:pour|afin\s+de|afin\s+d['’]|in\s+order\s+to)\b", re.I)
 _CHAINED_RE = re.compile(r"\b(?:et|puis|ensuite|apr[eè]s|then|and)\b|[,;]", re.I)
 
 
@@ -196,7 +136,7 @@ def parse_simple_order(query: str) -> tuple[str, str] | None:
     from seraphim.desktop.activate import split_location
 
     core = split_location(target)[0]       # « … et tu vois dans Windows Explorer » ne compte pas
-    if not core or _CHAINED_RE.search(core) or len(core) > 80:
+    if not core or _CHAINED_RE.search(core) or _PURPOSE_RE.search(core) or len(core) > 80:
         return None
     verb = m.group("verb").lower()
     if "droit" in verb or "right" in verb:
@@ -210,41 +150,144 @@ def parse_simple_order(query: str) -> tuple[str, str] | None:
     return mode, target
 
 
+_SPLIT_ORDER_RE = re.compile(r"\s*(?:,|;|\bet\s+(?:ensuite\s+|apr[eè]s\s+)?|\bpuis\b|\bensuite\b)\s*", re.I)
+
+
+# Un morceau qui commence ainsi n'est pas une nouvelle étape (« et tu vois dans… »)
+_CONTINUATION_RE = re.compile(
+    r"^(?:tu|vous|on|il|elle|ils|que|qu['’]|qui|[çc]a|c['’]est|ce|cet|cette|le|la|les|l['’]|un|une|des|du|de|d['’]|"
+    r"dans|sur|à|au|aux|avec|en|par|pour|mon|ma|mes|ton|ta|tes|son|sa|ses|si|quand|comme)\b",
+    re.I,
+)
+
+
+def split_order(query: str) -> list[str]:
+    """« ouvre X et trie par Y » → ["ouvre X", "trie par Y"]. Les morceaux sans verbe
+    d'action (« et tu vois dans l'explorateur ») restent collés au précédent."""
+    parts: list[str] = []
+    for chunk in _SPLIT_ORDER_RE.split((query or "").strip().rstrip(".!?")):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        first = chunk.split()[0].lower()
+        looks_like_verb = bool(re.fullmatch(r"[a-zàâçéèêëîïôûùüœ'’-]+(?:e|s|z)|va|vas", first))
+        if parts and (_CONTINUATION_RE.match(chunk) or not looks_like_verb):
+            parts[-1] += " et " + chunk
+        else:
+            parts.append(chunk)
+    return parts
+
+
 def is_order(query: str) -> bool:
     """Ordre explicite d'agir à l'écran (« clique sur… », « peux-tu ouvrir… »)."""
     return bool(_ORDER_RE.match(query or ""))
 
 
-def _to_int(v):
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        return int(v)
-    if isinstance(v, str):
-        v = re.sub(r"[^\d-]", "", v)
-        return int(v) if v not in ("", "-") else None
-    return None
+# ── Plan en étapes simples (mode action) ─────────────────────────────────────
+
+PLAN_PROMPT = """Tu pilotes un PC Windows 11 en français pour l'utilisateur, à la souris et au clavier.
+Tu écris un plan : une commande par ligne, rien d'autre (pas de numéros, pas d'explications).
+
+Commandes :
+clique sur NOM — NOM = texte affiché à l'écran (bouton, fichier, menu, onglet…)
+double-clique sur NOM
+clic droit sur NOM
+ouvre NOM — fichier, dossier ou application
+écris TEXTE — dans le champ actif
+touche RACCOURCI — ex : win+e, alt+enter, ctrl+l, enter, escape, alt+f4
+lance CIBLE — comme Exécuter (Win+R) : dossier (D:\\), page de paramètres (ms-settings:display), programme (taskmgr)
+cherche TEXTE — recherche Windows (menu Démarrer) puis Entrée
+défile vers le bas / défile vers le haut
+attends
+lis l'écran — pour lire un texte avant de répondre
+fini : PHRASE — quand la demande est accomplie, ce que tu dis à l'utilisateur
+
+Aide-mémoire Windows :
+- Disques : lance shell:MyComputerFolder (Ce PC) ; un disque s'affiche « Nom (D:) ».
+- Propriétés d'un fichier, dossier ou disque : clic droit sur NOM puis clique sur Propriétés.
+- Paramètres : lance ms-settings:display (écran), ms-settings:sound (son), ms-settings:colors (couleurs, mode sombre),
+  ms-settings:network (réseau), ms-settings:bluetooth, ms-settings:appsfeatures (applications),
+  ms-settings:storagesense (stockage), ms-settings:windowsupdate (mises à jour), ms-settings:personalization.
+- Outils : lance taskmgr (gestionnaire des tâches), control (panneau de configuration),
+  devmgmt.msc (périphériques), diskmgmt.msc (gestion des disques), winver (version de Windows).
+- Dossiers : lance D:\\ ; lance shell:Downloads ; lance shell:Desktop ; lance shell:Documents.
+- Utilise les noms EXACTS affichés à l'écran (voir « Écran actuel »).
+
+Exemple — Demande : ouvre les paramètres du son
+lance ms-settings:sound
+fini : J'ai ouvert les paramètres du son.
+
+Exemple — Demande : renomme le fichier rapport.txt en final.txt
+clic droit sur rapport.txt
+clique sur Renommer
+écris final.txt
+touche enter
+fini : Le fichier s'appelle maintenant final.txt."""
+
+_STEP_RE = re.compile(
+    r"^\s*(?:[-*•]|\d+\s*[.)-])?\s*"
+    r"(?P<cmd>double[- ]?clique\s+sur|clic\s+droit\s+sur|clique\s+droit\s+sur|clique\s+sur|clic\s+sur|"
+    r"ouvre|[ée]cris|tape|touches?|appuie\s+sur|lance|ex[ée]cute|cherche|"
+    r"d[ée]file\s+vers\s+le\s+(?:bas|haut)|d[ée]file|attends|lis\s+l['’]?\s*[ée]cran|fini|termin[ée])"
+    r"\s*:?\s*(?P<arg>.*?)\s*$",
+    re.I,
+)
 
 
-def parse_decision(raw: str) -> dict:
-    """Extrait le JSON de décision de la réponse du LLM (tolérant)."""
-    raw = (raw or "").strip()
-    candidates = [raw]
-    m = re.search(r"\{.*\}", raw, re.S)
-    if m:
-        candidates.append(m.group(0))
-    for c in candidates:
-        try:
-            d = json.loads(c)
-            if isinstance(d, dict) and d.get("action"):
-                d["action"] = str(d["action"]).strip().lower()
-                for k in ("target", "x", "y"):
-                    if k in d:
-                        d[k] = _to_int(d[k])
-                return d
-        except (json.JSONDecodeError, ValueError):
+@dataclass
+class PlanStep:
+    kind: str        # click | double | right | open | type | key | run | search | scroll | wait | read | done
+    arg: str
+    raw: str
+
+
+def parse_plan(text: str) -> list[PlanStep]:
+    """Lignes du plan écrit par le modèle → étapes. Les lignes hors format sont ignorées."""
+    steps: list[PlanStep] = []
+    for line in (text or "").splitlines():
+        line = line.strip().strip("`")
+        m = _STEP_RE.match(line)
+        if not m:
             continue
-    raise ValueError(f"Réponse non exploitable : {raw[:200]}")
+        cmd = re.sub(r"\s+", " ", m.group("cmd").lower())
+        arg = m.group("arg").strip()
+        if len(arg) > 1 and arg[0] in "«\"'“" and arg[-1] in "»\"'”":
+            arg = arg[1:-1].strip()
+        if cmd.startswith(("fini", "termin")):
+            if normalize_done := arg.lower().strip(" .!:"):
+                arg = "" if normalize_done in ("fini", "terminé", "termine", "c'est fini") else arg
+            steps.append(PlanStep("done", arg, line))
+            break
+        if cmd.startswith(("double",)):
+            kind = "double"
+        elif "droit" in cmd:
+            kind = "right"
+        elif cmd.startswith(("clique", "clic")):
+            kind = "click"
+        elif cmd == "ouvre":
+            kind = "open"
+        elif cmd.startswith(("écris", "ecris", "tape")):
+            kind = "type"
+        elif cmd.startswith(("touche", "appuie")):
+            kind = "key"
+            arg = re.sub(r"\s*\+\s*", "+", arg.lower()).rstrip(".")
+        elif cmd in ("lance", "exécute", "execute"):
+            kind = "run"
+            arg = arg.rstrip(".")
+        elif cmd == "cherche":
+            kind = "search"
+        elif cmd.startswith(("défile", "defile")):
+            kind, arg = "scroll", ("up" if "haut" in cmd else "down")
+        elif cmd == "attends":
+            kind = "wait"
+        elif cmd.startswith("lis"):
+            kind = "read"
+        else:
+            continue
+        if kind in ("click", "double", "right", "open", "type", "key", "run", "search") and not arg:
+            continue
+        steps.append(PlanStep(kind, arg, line))
+    return steps
 
 
 def split_action_line(text: str) -> tuple[str, str]:
@@ -263,14 +306,6 @@ def split_action_line(text: str) -> tuple[str, str]:
     return "\n".join(kept).strip(), action
 
 
-@dataclass
-class StepResult:
-    summary: str          # ce qui a été fait (affiché à l'utilisateur)
-    feedback: str         # retour pour le LLM au tour suivant
-    finished: bool = False
-    answer: str = ""
-
-
 class DesktopAgent(BaseAgent):
     name = "desktop"
     description = (
@@ -278,7 +313,7 @@ class DesktopAgent(BaseAgent):
         "répond aux questions sur ce qui est affiché, propose de l'aide et agit à la souris "
         "et au clavier"
     )
-    system_prompt = SYSTEM_PROMPT
+    system_prompt = PLAN_PROMPT
     _auto_trace = False
 
     # ── LLM ──────────────────────────────────────────────────────────────────
@@ -289,25 +324,6 @@ class DesktopAgent(BaseAgent):
 
         from seraphim.settings import settings
         return httpx.Timeout(settings.desktop.llm_timeout, connect=10)
-
-    @classmethod
-    async def _ollama_decide(cls, model: str, base_url: str, messages: list[dict],
-                             num_ctx: int, num_predict: int) -> str:
-        """Appel Ollama dédié : sortie JSON contrainte, délai long (CPU lent)."""
-        import httpx
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "format": DECISION_SCHEMA,
-            "keep_alive": "30m",
-            "options": {"temperature": 0.1, "num_ctx": num_ctx, "num_predict": num_predict},
-        }
-        async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=cls._timeout()) as c:
-            r = await c.post("/api/chat", json=payload)
-            r.raise_for_status()
-            return r.json().get("message", {}).get("content", "") or ""
 
     @classmethod
     async def _ollama_stream(cls, model: str, base_url: str, messages: list[dict],
@@ -330,45 +346,6 @@ class DesktopAgent(BaseAgent):
                     yield chunk
                 if data.get("done"):
                     break
-
-    async def _decide(self, task: str, history: list[str], obs_text: str, shot=None) -> dict:
-        from seraphim.settings import settings
-
-        hist = "\n".join(history[-8:]) or "(aucune action pour l'instant)"
-        user = (f"Demande : {task}\n\nHistorique :\n{hist}\n\n"
-                f"État actuel de l'écran :\n{obs_text}\n\n")
-        if shot is not None:
-            user += f"La capture jointe fait {shot.width}×{shot.height} pixels.\n"
-        user += "Quelle est la prochaine action ? Réponds en JSON."
-
-        if shot is not None:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT_VISION},
-                        {"role": "user", "content": user, "images": [shot.b64]}]
-        else:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user}]
-
-        eng = self.engine
-        cfg = settings.desktop
-        last_err: Exception | None = None
-        for _ in range(2):
-            if shot is not None:
-                raw = await self._ollama_decide(cfg.vision_model, settings.engine.base_url,
-                                                messages, cfg.vision_num_ctx, 300)
-            elif getattr(eng, "id", "") == "ollama":
-                raw = await self._ollama_decide(
-                    getattr(eng, "model", settings.engine.model),
-                    getattr(eng, "base_url", settings.engine.base_url),
-                    messages, settings.engine.context_window, 300)
-            else:
-                raw = await self._chat(messages)
-            try:
-                return parse_decision(raw)
-            except ValueError as exc:
-                last_err = exc
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": "Réponds uniquement avec l'objet JSON demandé."})
-        raise last_err or ValueError("pas de décision")
 
     # ── Mode regard : répondre sur ce qui est à l'écran, proposer ────────────
 
@@ -453,157 +430,6 @@ class DesktopAgent(BaseAgent):
             yield (f"\n\n👉 Je peux m'en occuper : **{action}**. "
                    "Réponds « oui » pour que je le fasse.")
 
-    # ── Mode action : exécution d'une action ─────────────────────────────────
-
-    @staticmethod
-    def _bring_to_front(hwnd: int) -> None:
-        """Remet la fenêtre de travail devant si l'utilisateur a cliqué ailleurs."""
-        import win32gui
-
-        from seraphim.desktop import computer as pc
-
-        if win32gui.GetForegroundWindow() != hwnd:
-            pc.focus_window(hwnd)
-
-    async def _execute(self, d: dict, obs, task: str, cfg, shot=None) -> StepResult:
-        from seraphim.desktop import computer as pc
-
-        action = d.get("action", "")
-        text = str(d.get("text") or "").strip()
-        el = obs.element(d.get("target"))
-
-        def need_el() -> StepResult | None:
-            if el is None:
-                return StepResult(
-                    summary=f"⚠️ {action} : élément [{d.get('target')}] introuvable",
-                    feedback=f"ERREUR : l'élément [{d.get('target')}] n'existe pas dans la liste actuelle.",
-                )
-            return None
-
-        if cfg.confirm_risky and action in ("click", "double_click", "click_at", "type", "key",
-                                            "click_on", "open_item"):
-            label = " ".join(filter(None, [el.name if el else "",
-                                           text if action in ("key", "click_at", "click_on", "open_item") else ""]))
-            fam = risky_family(label, task)
-            if fam:
-                msg = (f"Je me suis arrêté avant d'agir sur « {label} » (action sensible : {fam}). "
-                       "Si c'est bien ce que tu veux, redemande-le explicitement.")
-                return StepResult(summary=f"⛔ {msg}", feedback="", finished=True, answer=msg)
-
-        if action in _INPUT_ACTIONS and obs.window_hwnd:
-            await asyncio.to_thread(self._bring_to_front, obs.window_hwnd)
-
-        if action in ("click_on", "open_item"):
-            if not text:
-                return StepResult(f"⚠️ {action} sans texte", "ERREUR : 'text' doit être le texte affiché de la cible.")
-            out = await self._activate(text, "open" if action == "open_item" else "click", task, cfg,
-                                       obs.window_hwnd)
-            if out.success:
-                self._target_hwnd = None      # suivre la fenêtre qui vient éventuellement de s'ouvrir
-                return StepResult(out.message, out.message)
-            if out.message.startswith("⛔"):
-                return StepResult(out.message, "", finished=True, answer=out.message)
-            return StepResult(f"⚠️ {out.message}",
-                              f"ERREUR : {out.message} Essaie un autre texte visible, un [id] ou click_at.")
-
-        if action in ("click", "double_click", "right_click"):
-            if (err := need_el()):
-                return err
-            button = "right" if action == "right_click" else "left"
-            await asyncio.to_thread(pc.click, el.x, el.y, button, action == "double_click")
-            verb = {"click": "Clic", "double_click": "Double-clic", "right_click": "Clic droit"}[action]
-            return StepResult(f"{verb} sur « {el.name} »", f"{verb} effectué sur [{el.id}] « {el.name} ».")
-
-        if action == "click_at":
-            x, y = d.get("x"), d.get("y")
-            if shot is None or x is None or y is None:
-                return StepResult("⚠️ click_at sans position",
-                                  "ERREUR : click_at demande x ET y (pixels de la capture). "
-                                  "Donne-les, ou utilise click avec un [id].")
-            sx, sy = shot.to_screen(x, y)
-            await asyncio.to_thread(pc.click, sx, sy)
-            what = f" sur « {text} »" if text else ""
-            return StepResult(f"Clic{what} (position {x},{y})", f"Clic effectué en ({x},{y}){what}.")
-
-        if action == "type":
-            if not text:
-                return StepResult("⚠️ type sans texte", "ERREUR : 'text' est vide.")
-            if el is not None:
-                await asyncio.to_thread(pc.click, el.x, el.y)
-                await asyncio.sleep(0.2)
-            await asyncio.to_thread(pc.type_text, text)
-            where = f" dans « {el.name} »" if el else ""
-            short = text if len(text) <= 60 else text[:57] + "…"
-            return StepResult(f"Saisie « {short} »{where}", f"Texte saisi{where}.")
-
-        if action == "key":
-            if not text:
-                return StepResult("⚠️ key sans touches", "ERREUR : 'text' doit contenir les touches.")
-            try:
-                pc.keys_to_pywinauto(text)
-            except ValueError as exc:
-                return StepResult(f"⚠️ raccourci invalide « {text} »", f"ERREUR : {exc}")
-            await asyncio.to_thread(pc.press_keys, text)
-            return StepResult(f"Touches « {text} »", f"Touches « {text} » envoyées.")
-
-        if action == "scroll":
-            direction = "up" if text.lower() in ("up", "haut") else "down"
-            x, y = (el.x, el.y) if el else pc.window_center(obs.window_hwnd)
-            await asyncio.to_thread(pc.scroll, x, y, direction)
-            return StepResult(f"Défilement vers le {'haut' if direction == 'up' else 'bas'}",
-                              f"Défilement {direction} effectué.")
-
-        if action == "open_app":
-            from seraphim.skills.registry import SKILL_REGISTRY, discover_skills
-            if not SKILL_REGISTRY:
-                discover_skills()
-            skill = SKILL_REGISTRY.get("app_manager")
-            if not skill or not text:
-                return StepResult("⚠️ open_app impossible", "ERREUR : application non précisée.")
-            r = await skill.run(action="open", app=text)
-            await asyncio.sleep(2.0)
-            self._target_hwnd = None  # se caler sur la fenêtre qui vient de s'ouvrir
-            return StepResult(f"Ouverture de {text}", r.output if r.success else f"ERREUR : {r.error}")
-
-        if action == "focus_window":
-            found = await asyncio.to_thread(pc.find_window, text)
-            if not found:
-                return StepResult(f"⚠️ fenêtre « {text} » introuvable",
-                                  f"ERREUR : aucune fenêtre ne contient « {text} ». Utilise un titre de la liste.")
-            hwnd, title = found
-            ok = await asyncio.to_thread(pc.focus_window, hwnd)
-            self._target_hwnd = hwnd
-            return StepResult(f"Fenêtre « {title} » au premier plan",
-                              f"Fenêtre « {title} » activée." if ok else "ERREUR : impossible d'activer la fenêtre.")
-
-        if action == "wait":
-            await asyncio.sleep(2.0)
-            return StepResult("Attente…", "Attente de 2 s effectuée.")
-
-        if action == "read_screen":
-            txt = await asyncio.to_thread(pc.screen_text)
-            return StepResult("Lecture du texte à l'écran (OCR)",
-                              "Texte lu à l'écran :\n" + (txt[:2500] or "(aucun texte)"))
-
-        if action == "describe_screen":
-            from seraphim.settings import settings
-            model = cfg.vision_model
-            if not await pc.vision_model_available(model, settings.engine.base_url):
-                txt = await asyncio.to_thread(pc.screen_text)
-                return StepResult(
-                    "Analyse de l'écran (OCR — pas de modèle de vision installé)",
-                    "Aucun modèle de vision configuré ; voici le texte lu à l'écran :\n" + txt[:2500],
-                )
-            desc = await pc.describe_screen(text or task, model, settings.engine.base_url)
-            return StepResult(f"Analyse visuelle de l'écran ({model})", "Description de l'écran :\n" + desc[:2500])
-
-        if action in ("done", "fail"):
-            answer = text or ("Tâche terminée." if action == "done" else "Je n'ai pas réussi.")
-            return StepResult(summary="", feedback="", finished=True,
-                              answer=answer if action == "done" else f"❌ {answer}")
-
-        return StepResult(f"⚠️ action inconnue « {action} »", f"ERREUR : action inconnue « {action} ».")
-
     async def _activate(self, target: str, mode: str, task: str, cfg, hwnd: int | None = None):
         """Trouve `target` n'importe où à l'écran et l'active (moteur générique)."""
         from seraphim.desktop import activate
@@ -618,6 +444,34 @@ class DesktopAgent(BaseAgent):
             base_url=settings.engine.base_url, forbid=forbid,
         )
 
+    @staticmethod
+    async def _launch_app(name: str) -> str | None:
+        from seraphim.skills.registry import SKILL_REGISTRY, discover_skills
+        if not SKILL_REGISTRY:
+            discover_skills()
+        skill = SKILL_REGISTRY.get("app_manager")
+        if skill:
+            r = await skill.run(action="open", app=name)
+            if r.success:
+                await asyncio.sleep(2.0)
+                return r.output
+        return None
+
+    async def _open_elsewhere(self, name: str) -> str | None:
+        """« ouvre X » quand X n'est pas à l'écran : lieu Windows connu (paramètres,
+        dossiers, outils), sinon application installée. None si rien ne marche."""
+        from seraphim.desktop import computer as pc
+        from seraphim.desktop.places import resolve_place
+
+        if place := resolve_place(name):
+            try:
+                await asyncio.to_thread(pc.run_target, place)
+                await asyncio.sleep(2.0)
+                return f"J'ai ouvert « {name} » ({place})."
+            except Exception as exc:
+                logger.debug("open place %s failed: %s", place, exc)
+        return await self._launch_app(name)
+
     async def _direct(self, task: str, cfg) -> tuple[bool, str]:
         """Ordre simple « clique sur X » / « ouvre X » : trouver + activer, sans LLM.
         Retourne (réussi, compte rendu)."""
@@ -629,17 +483,6 @@ class DesktopAgent(BaseAgent):
 
         name = clean_target(target)
 
-        async def launch_app() -> str | None:
-            from seraphim.skills.registry import SKILL_REGISTRY, discover_skills
-            if not SKILL_REGISTRY:
-                discover_skills()
-            skill = SKILL_REGISTRY.get("app_manager")
-            if skill:
-                r = await skill.run(action="open", app=name)
-                if r.success:
-                    return r.output
-            return None
-
         known_app = False
         if mode == "open":
             try:
@@ -647,14 +490,14 @@ class DesktopAgent(BaseAgent):
                 known_app = name.lower() in _APP_MAP
             except Exception:
                 pass
-        if known_app and (msg := await launch_app()):
+        if known_app and (msg := await self._launch_app(name)):
             return True, msg
 
         out = await self._activate(target, mode, task, cfg)
         if out.success or out.message.startswith("⛔"):
             return True, out.message
-        if mode == "open" and not known_app and (msg := await launch_app()):
-            return True, msg      # pas à l'écran : c'était une application à lancer
+        if mode == "open" and not known_app and (msg := await self._open_elsewhere(name)):
+            return True, msg      # pas à l'écran : un lieu Windows ou une application
 
         # Introuvable : nom peut-être mal entendu par la dictée → on devine parmi ce
         # qui est visible, et on PROPOSE (l'utilisateur valide par « oui »).
@@ -691,84 +534,182 @@ class DesktopAgent(BaseAgent):
         return (f"Je ne vois pas « {name} » à l'écran. Tu voulais dire **« {guess} »** ? "
                 f"Réponds « oui » pour que je {infinitive}.")
 
-    async def _act(self, task: str, vision: bool, cfg) -> AsyncIterator[str]:
+    # ── Mode action : planifier, exécuter, replanifier ───────────────────────
+
+    async def _plan(self, goal: str, history: list[str], obs_text: str, problem: str) -> list[PlanStep]:
+        done = "\n".join(f"{i}. {h}" for i, h in enumerate(history[-12:], 1)) or "(rien pour l'instant)"
+        user = (f"Demande : {goal}\n\nDéjà fait :\n{done}\n\nÉcran actuel :\n{obs_text}\n\n"
+                + (f"Problème à l'étape précédente : {problem}\n\n" if problem else "")
+                + "Écris la suite du plan, une commande par ligne "
+                  "(ou seulement « fini : … » si la demande est déjà accomplie).")
+        raw = await self._chat([{"role": "system", "content": PLAN_PROMPT}, {"role": "user", "content": user}])
+        return parse_plan(raw)
+
+    async def _focus_work_window(self) -> None:
+        """Les touches et la saisie doivent aller dans la fenêtre de travail, pas dans Seraphim."""
+        import win32gui
+
+        from seraphim.desktop import activate
         from seraphim.desktop import computer as pc
 
-        self._vision = vision
-        self._target_hwnd: int | None = None
-        history: list[str] = []
-        last_sig: list[str] = []
-        warned = False
+        fg = win32gui.GetForegroundWindow()
+        if fg and activate._is_seraphim(fg):
+            hwnd, _, _ = await asyncio.to_thread(pc.pick_target_window)
+            if hwnd:
+                await asyncio.to_thread(pc.focus_window, hwnd)
 
+    async def _run_step(self, step: PlanStep, goal: str, cfg) -> tuple[bool, str]:
+        from seraphim.desktop import computer as pc
+
+        kind, arg = step.kind, step.arg
+        if kind in ("click", "double", "right", "open"):
+            out = await self._activate(arg, kind, goal, cfg)
+            if out.success or out.message.startswith("⛔") or kind != "open":
+                return out.success, out.message
+            from seraphim.desktop.activate import clean_target
+            if msg := await self._open_elsewhere(clean_target(arg)):
+                return True, msg
+            return False, out.message
+
+        if kind == "run":
+            try:
+                await asyncio.to_thread(pc.run_target, arg)
+            except Exception as exc:
+                return False, f"impossible de lancer « {arg} » : {exc}"
+            await asyncio.sleep(2.0)
+            return True, f"« {arg} » lancé"
+
+        if kind == "search":
+            await asyncio.to_thread(pc.press_keys, "win")
+            await asyncio.sleep(0.9)
+            await asyncio.to_thread(pc.type_text, arg)
+            await asyncio.sleep(1.5)
+            await asyncio.to_thread(pc.press_keys, "enter")
+            await asyncio.sleep(1.5)
+            return True, f"recherche Windows « {arg} »"
+
+        if kind in ("key", "type", "scroll"):
+            await self._focus_work_window()
+            if kind == "key":
+                try:
+                    pc.keys_to_pywinauto(arg)
+                except ValueError as exc:
+                    return False, f"raccourci invalide « {arg} » ({exc})"
+                if cfg.confirm_risky and (fam := risky_family(arg, goal)):
+                    return False, f"⛔ touche « {arg} » non envoyée (action sensible : {fam})"
+                await asyncio.to_thread(pc.press_keys, arg)
+                return True, f"touches « {arg} »"
+            if kind == "type":
+                await asyncio.to_thread(pc.type_text, arg)
+                return True, "texte saisi"
+            import win32gui
+            x, y = pc.window_center(win32gui.GetForegroundWindow())
+            await asyncio.to_thread(pc.scroll, x, y, "up" if arg == "up" else "down")
+            return True, "défilement"
+
+        if kind == "wait":
+            await asyncio.sleep(2.0)
+            return True, "attente"
+
+        if kind == "read":
+            txt = await asyncio.to_thread(pc.screen_text)
+            return True, "texte à l'écran : " + (txt[:1500] or "(aucun)")
+
+        return False, f"commande inconnue « {step.raw} »"
+
+    async def _act(self, task: str, vision: bool, cfg, goal: str = "") -> AsyncIterator[str]:
+        """Ordre simple → exécution directe. Sinon : plan en étapes simples, exécutées
+        une à une avec vérification ; au premier échec, on regarde l'écran et on
+        replanifie (le modèle voit ce qui a marché, ce qui a échoué, et l'écran)."""
+        from seraphim.desktop import computer as pc
+
+        goal = goal or task
+        self._vision = vision
+        await asyncio.to_thread(pc.release_emergency_corner)
+        yield "🖐️ Je prends la main (souris dans le coin haut-gauche = arrêt d'urgence).\n"
+
+        history: list[str] = []
+        problem = ""
         if parse_simple_order(task):
-            yield "🖐️ Je prends la souris (souris dans le coin haut-gauche = arrêt d'urgence).\n"
-            warned = True
             done, msg = await self._direct(task, cfg)
             if done:
                 yield msg
                 return
-            yield f"{msg} Je cherche autrement…\n"
-            history.append(f"Recherche directe : {msg}")
+            history.append(f"{task} → ÉCHEC : {msg}")
+            problem = msg
+            yield f"{msg} Je cherche un autre moyen…\n"
+        else:
+            # « ouvre le gestionnaire des tâches et trie par mémoire » : les premières
+            # parties simples sont faites directement, le plan s'occupe du reste.
+            parts = split_order(task)
+            for part in parts[:-1] if len(parts) > 1 else []:
+                if not parse_simple_order(part):
+                    break
+                done, msg = await self._direct(part, cfg)
+                yield f"• {part} {'✓' if done else '✗ ' + msg}\n"
+                history.append(f"{part} → " + ("OK" if done else f"ÉCHEC : {msg}"))
+                if not done:
+                    problem = msg
+                    break
+                await asyncio.sleep(cfg.settle_delay)
 
-        for step in range(1, cfg.max_steps + 1):
-            if await asyncio.to_thread(pc.emergency_stop_requested):
-                yield "\n⛔ Arrêt d'urgence demandé (souris dans le coin haut-gauche)."
+        n = 0
+        failures: dict[str, int] = {}
+        successes: dict[str, int] = {}
+        for _ in range(cfg.max_replans):
+            obs = await asyncio.to_thread(pc.observe, None, False, True)
+            try:
+                plan = await self._plan(goal, history, obs.to_prompt(), problem)
+            except Exception as exc:
+                logger.warning("desktop plan failed: %s", exc)
+                yield f"\n❌ Je n'arrive pas à établir un plan ({type(exc).__name__}: {exc})."
                 return
+            if not plan:
+                problem = "ta réponse ne contenait aucune commande valide : une commande par ligne."
+                continue
 
-            obs = await asyncio.to_thread(pc.observe, self._target_hwnd, False, not vision)
-            self._target_hwnd = obs.window_hwnd or self._target_hwnd
-            shot = None
-            if vision:
+            problem = ""
+            for step in plan:
+                if step.kind == "done":
+                    yield f"\n{step.arg or 'C’est fait.'}"
+                    return
+                if await asyncio.to_thread(pc.emergency_stop_requested):
+                    yield "\n⛔ Arrêt d'urgence demandé (souris dans le coin haut-gauche)."
+                    return
+                if n >= cfg.max_steps:
+                    yield f"\n⚠️ J'ai atteint la limite de {cfg.max_steps} étapes sans finir."
+                    return
+                key = step.raw.lower()
+                if step.kind not in ("scroll", "key", "wait", "type", "read") and successes.get(key, 0) >= (
+                        1 if history and history[-1].lower() == f"{key} → ok" else 2):
+                    problem = (f"« {step.raw} » a déjà été fait avec succès : ne le refais pas. Regarde "
+                               "l'écran actuel et écris l'étape SUIVANTE (ou « fini : … » si c'est accompli).")
+                    break
+                n += 1
                 try:
-                    shot = await asyncio.to_thread(
-                        pc.screenshot_for_model, obs.window_hwnd, obs.elements, cfg.vision_max_width)
+                    ok, msg = await self._run_step(step, goal, cfg)
                 except Exception as exc:
-                    logger.warning("desktop screenshot failed: %s", exc)
+                    logger.exception("desktop step failed")
+                    ok, msg = False, f"erreur : {exc}"
+                yield f"{n}. {step.raw} {'✓' if ok else '✗ ' + msg}\n"
+                if msg.startswith("⛔"):
+                    yield f"\n{msg}. Si c'est bien ce que tu veux, demande-le explicitement."
+                    return
+                history.append(f"{step.raw} → " + ("OK" if ok else f"ÉCHEC : {msg}"))
+                if ok:
+                    successes[key] = successes.get(key, 0) + 1
+                else:
+                    failures[key] = failures.get(key, 0) + 1
+                    if failures[key] >= 2:
+                        problem = (f"« {step.raw} » a déjà échoué {failures[key]} fois : "
+                                   "fais autrement (autre nom visible à l'écran, raccourci, lance, cherche).")
+                    else:
+                        problem = msg
+                    break
+                await asyncio.sleep(cfg.settle_delay)
+            # Plan terminé sans « fini », ou étape ratée : on regarde l'écran et on continue
 
-            try:
-                d = await self._decide(task, history, obs.to_prompt(), shot)
-            except Exception as exc:
-                logger.warning("desktop decide failed: %s", exc)
-                yield f"\n❌ Le modèle n'a pas fourni d'action exploitable ({type(exc).__name__}: {exc})."
-                return
-
-            sig = f"{d.get('action')}|{d.get('target')}|{d.get('x')}|{d.get('y')}|{d.get('text')}"
-            last_sig = (last_sig + [sig])[-3:]
-            if len(last_sig) == 3 and len(set(last_sig)) == 1 and d.get("action") not in ("wait",):
-                yield "\n❌ Je tourne en rond (même action répétée 3 fois) — j'arrête."
-                return
-
-            if await asyncio.to_thread(pc.emergency_stop_requested):
-                yield "\n⛔ Arrêt d'urgence demandé (souris dans le coin haut-gauche)."
-                return
-
-            if d.get("action") in _INPUT_ACTIONS and not warned:
-                warned = True
-                yield "🖐️ Je prends la souris (souris dans le coin haut-gauche = arrêt d'urgence).\n"
-
-            try:
-                res = await self._execute(d, obs, task, cfg, shot)
-            except Exception as exc:
-                logger.exception("desktop action failed")
-                res = StepResult(f"⚠️ échec de {d.get('action')}", f"ERREUR pendant l'action : {exc}")
-
-            if res.finished:
-                if res.summary:
-                    yield f"{step}. {res.summary}\n"
-                yield f"\n{res.answer}"
-                return
-
-            yield f"{step}. {res.summary}\n"
-            history.append(
-                f"Étape {step} : {d.get('action')}"
-                + (f" [{d.get('target')}]" if d.get("target") is not None else "")
-                + (f" ({d.get('x')},{d.get('y')})" if d.get("action") == "click_at" else "")
-                + (f" « {d.get('text')} »" if d.get("text") else "")
-                + f" → {res.feedback}"
-            )
-            await asyncio.sleep(cfg.settle_delay)
-
-        yield f"\n⚠️ Nombre maximal d'étapes atteint ({cfg.max_steps}) sans terminer la tâche."
+        yield "\n⚠️ Je n'ai pas réussi à aller au bout. " + (f"Dernier problème : {problem}" if problem else "")
 
     # ── Point d'entrée ───────────────────────────────────────────────────────
 
@@ -790,8 +731,9 @@ class DesktopAgent(BaseAgent):
         # « oui » à une proposition faite au message précédent → on l'exécute
         prop = pending.pop_pending(session_id) if pending.is_confirmation(task) else None
         pending.clear_pending(session_id)
+        goal = task
         if prop:
-            task = prop.task
+            task, goal = prop.task, prop.question or prop.task   # objectif = la demande d'origine
             yield f"✅ C'est parti : {task}\n"
 
         vision = await pc.vision_model_available(cfg.vision_model, settings.engine.base_url)
@@ -800,7 +742,7 @@ class DesktopAgent(BaseAgent):
                    f"modèle de vision : `ollama pull {cfg.vision_model or 'qwen2.5vl:3b'}`.)_\n\n")
 
         if prop or is_order(task):
-            async for chunk in self._act(task, vision, cfg):
+            async for chunk in self._act(task, vision, cfg, goal):
                 yield chunk
         else:
             async for chunk in self._look(task, vision, cfg):

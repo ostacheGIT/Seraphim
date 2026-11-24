@@ -172,7 +172,7 @@ def _maybe_start_daemon() -> None:
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 
-EngineId = Optional[Literal["auto", "ollama_qwen3b", "ollama_qwen7b", "openai", "mistral", "claude", "vllm", "llamacpp"]]
+EngineId = Optional[Literal["auto", "ollama_qwen3b", "ollama_qwen7b", "colibri", "openai", "mistral", "claude", "vllm", "llamacpp"]]
 
 # ─── Complexity-based auto-router (3B ↔ 7B) ──────────────────────────────────
 
@@ -491,6 +491,14 @@ async def engine_warmup(body: dict):
     # "auto" resolves to 3B for warmup purposes
     if engine_id == "auto":
         engine_id = "ollama_qwen3b"
+    # colibri : le démarrer dès qu'il est sélectionné (il ne tourne pas en permanence)
+    if engine_id == "colibri":
+        try:
+            eng = get_engine("colibri")
+            await eng.ensure_running()
+            return {"status": "ready", "engine_id": engine_id, "model": eng.model}
+        except Exception as exc:
+            return {"status": "error", "engine_id": engine_id, "detail": str(exc)}
     # Skip warmup for non-Ollama engines (cloud APIs don't need it)
     if engine_id not in ("ollama_qwen3b", "ollama_qwen7b"):
         return {"status": "skipped", "engine_id": engine_id}

@@ -2,7 +2,7 @@
 
 import pytest
 
-from seraphim.agents.desktop import parse_decision, risky_family
+from seraphim.agents.desktop import parse_plan, risky_family
 from seraphim.agents.router import route
 from seraphim.desktop.computer import Element, Observation, escape_text, keys_to_pywinauto
 
@@ -31,13 +31,32 @@ def test_escape_text():
     assert escape_text("l1\nl2\tz") == "l1{ENTER}l2{TAB}z"
 
 
-def test_parse_decision_plain_and_wrapped():
-    d = parse_decision('{"thought": "ok", "action": "Click", "target": 3}')
-    assert d["action"] == "click" and d["target"] == 3
-    d = parse_decision('Voici :\n```json\n{"thought": "t", "action": "type", "target": "[7]", "text": "salut"}\n```')
-    assert d["target"] == 7 and d["text"] == "salut"
-    with pytest.raises(ValueError):
-        parse_decision("je ne sais pas")
+def test_parse_plan_lines():
+    plan = parse_plan("\n".join([
+        "Voici le plan :",
+        "1. lance shell:MyComputerFolder",
+        "- clic droit sur « Samsung SSD (D:) »",
+        "clique sur Propriétés",
+        "touche Alt + Enter",
+        "écris bonjour",
+        "défile vers le bas",
+        "une ligne hors format",
+        "fini : Voici les propriétés du disque D.",
+        "clique sur Après-fini",
+    ]))
+    assert [(p.kind, p.arg) for p in plan] == [
+        ("run", "shell:MyComputerFolder"),
+        ("right", "Samsung SSD (D:)"),
+        ("click", "Propriétés"),
+        ("key", "alt+enter"),
+        ("type", "bonjour"),
+        ("scroll", "down"),
+        ("done", "Voici les propriétés du disque D."),
+    ]
+
+
+def test_parse_plan_ignores_empty_commands():
+    assert parse_plan("clique sur\ntouche\nattends") == [parse_plan("attends")[0]]
 
 
 def test_risky_family_blocks_unrequested():
@@ -149,11 +168,6 @@ def test_is_order(query, expected):
 def test_split_action_line(text, answer, action):
     from seraphim.agents.desktop import split_action_line
     assert split_action_line(text) == (answer, action)
-
-
-def test_parse_decision_coordinates():
-    d = parse_decision('{"thought": "t", "action": "click_at", "x": "120", "y": 360.0, "text": "README"}')
-    assert d["x"] == 120 and d["y"] == 360 and d["action"] == "click_at"
 
 
 def test_shot_to_screen_maps_and_clamps():
@@ -296,3 +310,62 @@ FILES = [".git", "configs", "scripts", "src", "tests", "voices", ".gitignore", "
 def test_guess_misheard(heard, expected):
     from seraphim.desktop.activate import guess_misheard
     assert guess_misheard(heard, FILES) == expected
+
+
+@pytest.mark.parametrize("needle,text,ok", [
+    ("disque D:", "Samsung SSD (D:)", True),
+    ("lecteur D", "Samsung SSD (D:)", True),
+    ("D:", "Samsung SSD (D:)", True),
+    ("disque C:", "Samsung SSD (D:)", False),
+])
+def test_drive_matching(needle, text, ok):
+    from seraphim.desktop.activate import match_score
+    assert (match_score(needle, text) >= 90) is ok
+
+
+@pytest.mark.parametrize("cmd", ["cmd /c del x", "powershell -c rm x", "explorer & calc", "format D:",
+                                 r"reg delete HKCU\x", "shutdown /s"])
+def test_run_target_blocks_dangerous(cmd):
+    from seraphim.desktop.computer import run_target
+    with pytest.raises(ValueError):
+        run_target(cmd)
+
+
+def test_purpose_makes_a_plan_not_a_simple_order():
+    from seraphim.agents.desktop import parse_simple_order
+    assert parse_simple_order("clique sur l'icône de disque D pour ouvrir ses propriétés") is None
+
+
+@pytest.mark.parametrize("text,place", [
+    ("les paramètres d'affichage", "ms-settings:display"),
+    ("paramètres", "ms-settings:"),
+    ("le mode sombre", "ms-settings:colors"),
+    ("Ce PC", "shell:MyComputerFolder"),
+    ("gestionnaire des tâches", "taskmgr"),
+    ("fond d'écran", "ms-settings:personalization-background"),
+    ("README.md", None),
+])
+def test_resolve_place(text, place):
+    from seraphim.desktop.places import resolve_place
+    assert resolve_place(text) == place
+
+
+def test_ce_pc_is_not_stripped():
+    from seraphim.desktop.activate import clean_target
+    assert clean_target("Ce PC") == "Ce PC"
+
+
+def test_parse_plan_bare_fini_has_no_message():
+    assert parse_plan("fini")[0].arg == ""
+
+
+@pytest.mark.parametrize("query,parts", [
+    ("ouvre le gestionnaire des tâches et trie les processus par mémoire",
+     ["ouvre le gestionnaire des tâches", "trie les processus par mémoire"]),
+    ("ouvre chrome, va sur youtube puis cherche des chats", ["ouvre chrome", "va sur youtube", "cherche des chats"]),
+    ("ouvre README.md et tu vois dans Windows Explorer", ["ouvre README.md et tu vois dans Windows Explorer"]),
+    ("clique sur Noir et blanc", ["clique sur Noir et blanc"]),
+])
+def test_split_order(query, parts):
+    from seraphim.agents.desktop import split_order
+    assert split_order(query) == parts

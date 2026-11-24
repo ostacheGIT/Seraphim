@@ -82,9 +82,34 @@ def init_engines() -> None:
         from seraphim.engine.llamacpp import LlamaCppEngine
         register_engine("llamacpp", LlamaCppEngine(model=model, base_url=base_url), default=True)
 
+    # colibri : gros modèles MoE en local (option sélectionnable, démarré à la demande)
+    _register_colibri()
+
     # External API engines (registered only when keys are present)
     if ext:
         _register_external_engines(ext)
+
+
+def _register_colibri() -> None:
+    try:
+        from seraphim.settings import settings
+        cfg = settings.colibri
+    except Exception:
+        return
+    if not cfg.enabled:
+        return
+    from seraphim.engine.colibri import ColibriEngine
+
+    eng = ColibriEngine(
+        base_url=cfg.base_url, home=cfg.home, model=cfg.model,
+        api_key=_secret(cfg.api_key), autostart=cfg.autostart, start_timeout=cfg.start_timeout,
+    )
+    if not eng.installed() and cfg.base_url == "http://127.0.0.1:8000" and not cfg.model:
+        logger.info("colibri not installed at %s — engine not registered", cfg.home)
+        return
+    _ENGINE_LABELS["colibri"] = f"Colibri · {cfg.label}" if cfg.label else "Colibri"
+    register_engine("colibri", eng)
+    logger.info("Registered colibri engine (%s)", cfg.home)
 
 
 def _secret(v) -> str:
@@ -176,7 +201,7 @@ def list_available_engines() -> List[Dict]:
     """Return engine descriptors — always includes external engines (configured or not)."""
     _ensure_initialized()
     result: List[Dict] = [{"id": "auto", "label": _ENGINE_LABELS["auto"], "configured": True}]
-    for eid in ["ollama_qwen3b", "ollama_qwen7b"]:
+    for eid in ["ollama_qwen3b", "ollama_qwen7b", "colibri"]:
         if eid in _engines:
             result.append({"id": eid, "label": _ENGINE_LABELS.get(eid, eid), "configured": True})
     for eid, name, default_model in _EXTERNAL_DEFS:

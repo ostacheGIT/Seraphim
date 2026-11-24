@@ -771,6 +771,14 @@ def emergency_stop_requested() -> bool:
     return pt.x <= x0 + 2 and pt.y <= y0 + 2
 
 
+def release_emergency_corner() -> None:
+    """Curseur resté dans le coin d'arrêt d'urgence (fin d'une tâche précédente) :
+    on le replace au centre de l'écran principal pour ne pas bloquer la nouvelle tâche."""
+    if emergency_stop_requested():
+        u = ctypes.windll.user32
+        u.SetCursorPos(u.GetSystemMetrics(0) // 2, u.GetSystemMetrics(1) // 2)
+
+
 def click(x: int, y: int, button: str = "left", double: bool = False) -> None:
     from pywinauto import mouse
 
@@ -798,6 +806,44 @@ def scroll(x: int, y: int, direction: str, amount: int = 5) -> None:
 
     dist = amount if direction.lower() in ("up", "haut") else -amount
     mouse.scroll(coords=(x, y), wheel_dist=dist)
+
+
+# « lance » : comme la boîte Exécuter (Win+R). Pas d'enchaînement de commandes ni
+# de commandes destructrices : uniquement ouvrir un dossier, une page de
+# paramètres, une URL ou un programme.
+_RUN_BLOCK = re.compile(
+    r"[&|;<>`]|\$\(|"
+    r"\b(?:del|erase|rd|rmdir|format|rm|remove-item|shutdown|reg|diskpart|cipher|bcdedit|"
+    r"vssadmin|takeown|icacls|wmic|net|sc|schtasks|bitsadmin|certutil|mshta|rundll32|regsvr32)\b|"
+    r"\s/[ck]\b|\s-(?:c|command|enc|encodedcommand|e)\b",
+    re.I,
+)
+
+
+def run_target(target: str) -> str:
+    """Ouvre un dossier (D:\\), une page de paramètres (ms-settings:display), une URL
+    ou un programme (taskmgr, devmgmt.msc, notepad fichier.txt)."""
+    import os
+    import shlex
+
+    target = (target or "").strip().strip("«»\"'“”")
+    if not target:
+        raise ValueError("rien à lancer")
+    if _RUN_BLOCK.search(target):
+        raise ValueError(f"commande refusée par sécurité : « {target} »")
+    if re.match(r"^(?:[a-z][\w.+-]*:|[a-z]:\\|\\\\|shell:)", target, re.I) or Path(target).exists():
+        os.startfile(target)                       # URI, dossier, fichier
+        return target
+    try:
+        parts = shlex.split(target, posix=False)
+    except ValueError:
+        parts = target.split()
+    prog, args = parts[0], " ".join(parts[1:])
+    if args:
+        os.startfile(prog, arguments=args)
+    else:
+        os.startfile(prog)
+    return target
 
 
 def window_center(hwnd: int) -> tuple[int, int]:

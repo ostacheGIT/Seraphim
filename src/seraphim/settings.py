@@ -123,6 +123,7 @@ class WorkflowSettings(BaseModel):
 class DesktopSettings(BaseModel):
     """Agent « desktop » : contrôle du PC par observation de l'écran."""
     max_steps: int = 15
+    max_replans: int = 5             # nouveaux plans après un échec (on regarde l'écran et on corrige)
     settle_delay: float = 0.8        # pause après chaque action avant de ré-observer (s)
     # Modèle Ollama de vision : l'agent voit une capture de la fenêtre à chaque étape.
     # Vide ou non installé → mode texte seul (UI Automation + OCR).
@@ -131,6 +132,18 @@ class DesktopSettings(BaseModel):
     vision_num_ctx: int = 8192       # contexte du modèle de vision (image ≈ 1 200 tokens)
     confirm_risky: bool = True       # s'arrêter avant supprimer/payer/envoyer non demandés
     llm_timeout: float = 300.0       # délai max d'une décision du LLM (s) — CPU lent
+
+
+class ColibriSettings(BaseModel):
+    """Moteur colibri (gros modèles MoE en local, API compatible OpenAI)."""
+    enabled: bool = True
+    home: str = "D:/colibri"                 # dossier du dépôt colibri (contient c/coli)
+    base_url: str = "http://127.0.0.1:8000"
+    model: str = ""                          # vide = le modèle que colibri a chargé
+    label: str = "Inkling-2-Mini"            # nom affiché dans la liste des moteurs
+    api_key: SecretStr = SecretStr("")       # si colibri est lancé avec COLI_API_KEY
+    autostart: bool = True                   # démarrer colibri quand on le sélectionne
+    start_timeout: float = 240.0
 
 
 class Settings(BaseSettings):
@@ -143,6 +156,7 @@ class Settings(BaseSettings):
     channels: ChannelSettings = ChannelSettings()
     workflow: WorkflowSettings = WorkflowSettings()
     desktop: DesktopSettings = DesktopSettings()
+    colibri: ColibriSettings = ColibriSettings()
     log_level: str = "INFO"
     model_config = {"env_prefix": "SERAPHIM_", "env_nested_delimiter": "__"}
 

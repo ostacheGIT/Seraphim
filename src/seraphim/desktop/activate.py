@@ -50,7 +50,8 @@ _INVOKE_KINDS = {"Button", "SplitButton", "Hyperlink", "MenuItem", "MenuBarItem"
 
 # Mots génériques à retirer de la cible : « le bouton Paramètres » → « Paramètres »
 _GENERIC_RE = re.compile(
-    r"^(?:(?:sur|dans)\s+)?(?:(?:le|la|les|l['’]|l(?=\s)|un|une|du|de\s+la|des|ce|cet|cette|ces|mon|ma|mes|ton|ta)\s*)?"
+    # pas de « ce / cette » : « Ce PC » est un nom propre de Windows
+    r"^(?:(?:sur|dans)\s+)?(?:(?:le|la|les|l|un|une|du|de\s+la|des|mon|ma|mes|ton|ta)\s+|l['’]\s*)?"
     r"(?:(?:bouton|lien|fichier|dossier|onglet|ic[ôo]ne|menu|option|case|champ|élément|element|"
     r"raccourci|application|appli|programme|vid[ée]o|image|article|page|r[ée]sultat|mail|message|"
     r"button|link|file|folder|tab|icon|item)s?\s+)?",
@@ -146,9 +147,22 @@ def clean_target(target: str) -> str:
     return t or (target or "").strip()
 
 
+_DRIVE_RE = re.compile(
+    r"\s*(?:(?:le|mon|ton)\s+)?(?:(?:disque|lecteur|drive|volume)\s+(?:local\s+)?)?\(?([a-zA-Z]):\\?\)?\s*|"
+    r"\s*(?:(?:le|mon|ton)\s+)?(?:disque|lecteur|drive|volume)\s+(?:local\s+)?([a-zA-Z])\s*",
+    re.I,
+)
+
+
 def match_score(needle: str, text: str) -> float:
     """0-100 : à quel point `text` (affiché) correspond à la cible `needle`."""
     from rapidfuzz import fuzz
+
+    # Lecteur : « disque D: », « lecteur D », « D: » ↔ « Samsung SSD (D:) »
+    dm = _DRIVE_RE.fullmatch(needle or "")
+    if dm:
+        letter = dm.group(1) or dm.group(2)
+        return 95.0 if re.search(rf"\(\s*{letter}:\s*\)|^{letter}:\\?$", text or "", re.I) else 0.0
 
     n, t = normalize(needle), normalize(text)
     if not n or not t:
@@ -192,13 +206,44 @@ def _in_rects(x: int, y: int, rects) -> bool:
     return any(left <= x < right and top <= y < bottom for left, top, right, bottom in rects)
 
 
+_POPUP_CLASSES = {
+    "#32768",                                        # menu classique Win32
+    "Microsoft.UI.Content.PopupWindowSiteBridge",    # menu contextuel Windows 11 (« Hôte contextuel »)
+    "Xaml_WindowedPopupClass", "Windows.UI.Core.CoreWindow.Popup",
+    "DropDown", "ComboLBox", "SysDropDown",
+}
+
+
+def open_popups() -> list[int]:
+    """Menus et listes déroulantes ouverts (fenêtres-outils sans entrée dans la liste
+    des fenêtres), du dessus vers le dessous."""
+    import win32gui
+
+    found: list[int] = []
+
+    def cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd) in _POPUP_CLASSES:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if right - left > 20 and bottom - top > 20:
+                found.append(hwnd)
+        return True
+
+    try:
+        win32gui.EnumWindows(cb, None)
+    except Exception:
+        pass
+    return found
+
+
 def search_windows(preferred_hwnd: int | None = None) -> list[int]:
     """Fenêtre de travail d'abord, puis les autres fenêtres visibles (ordre Z),
     la barre des tâches et le bureau. Jamais Seraphim, jamais une fenêtre réduite."""
     import win32gui
 
     first, _, _ = pc.pick_target_window(preferred_hwnd)
-    out = [first] if first else []
+    out = open_popups()                      # un menu qui vient de s'ouvrir passe en premier
+    if first and first not in out:
+        out.append(first)
     for hwnd, _ in pc.list_windows():
         if hwnd not in out and not _is_seraphim(hwnd) and not win32gui.IsIconic(hwnd):
             out.append(hwnd)
@@ -258,7 +303,9 @@ def uia_search(needle: str, preferred_hwnd: int | None = None,
                     pass
                 if kind in _INTERACTIVE:
                     score += 3
-                score -= min(rank, 5)          # la fenêtre de travail passe devant
+                if kind in _LIST_KINDS:        # un fichier / dossier / disque plutôt qu'un bouton
+                    score += 2                 # homonyme (ex : fil d'Ariane de la barre d'adresse)
+                score -= min(rank, 5)          # menu ouvert, puis fenêtre de travail, d'abord
                 found.append(Candidate("uia", name[:80], cx, cy, score, hwnd, kind, info))
             except Exception:
                 continue
@@ -433,7 +480,12 @@ def _make_visible(c: Candidate) -> tuple[int, int]:
             except Exception:
                 pass
             r = c.info.rectangle
-            c.x, c.y = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+            sx0, sy0, sx1, sy1 = pc._screen_bounds()
+            cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+            # Rectangle vide (élément disparu, menu refermé…) : on garde l'ancienne position,
+            # sinon on cliquerait en (0, 0), dans le coin d'arrêt d'urgence.
+            if r.width() > 1 and r.height() > 1 and sx0 <= cx < sx1 and sy0 <= cy < sy1:
+                c.x, c.y = cx, cy
         except Exception:
             pass
     if c.hwnd and _owner_root(c.x, c.y) != c.hwnd:
@@ -470,6 +522,9 @@ def _apply(c: Candidate, method: str) -> None:
         x, y = _make_visible(c)
         if pc.emergency_stop_requested():
             raise RuntimeError("arrêt d'urgence")
+        sx0, sy0, _, _ = pc._screen_bounds()
+        if x <= sx0 + 4 and y <= sy0 + 4:
+            raise RuntimeError("position invalide (coin d'arrêt d'urgence)")
         if method == "mouse_right":
             pc.click(x, y, button="right")
         else:
@@ -633,8 +688,9 @@ async def find(target: str, preferred_hwnd: int | None = None,
             if work and c.hwnd == work:
                 c.score += 8
             cands.append(c)
-    if hinted:
-        cands = [c for c in cands if c.hwnd == hinted]
+    if hinted:                          # la fenêtre désignée, ou un menu ouvert par-dessus
+        allowed = {hinted, *await asyncio.to_thread(open_popups)}
+        cands = [c for c in cands if c.hwnd in allowed]
     if not cands and vision_model:
         try:
             for c in await vision_search(needle, vision_model, base_url):
