@@ -60,6 +60,8 @@ class Element:
     value: str = ""
     enabled: bool = True
     hint: str = ""        # AutomationId parlant (ex: num7Button)
+    w: int = 0            # taille de l'élément (0 = inconnue, ex : ligne OCR)
+    h: int = 0
 
     def describe(self) -> str:
         s = f"[{self.id}] {self.kind} {self.name}"
@@ -294,6 +296,7 @@ def _uia_elements(hwnd: int) -> list[Element]:
             elements.append(Element(
                 id=len(elements) + 1, kind=kind, name=name[:_MAX_NAME] or "(sans nom)",
                 x=cx, y=cy, value=value, enabled=enabled, hint=_hint(info, name),
+                w=r.width(), h=r.height(),
             ))
             if len(elements) >= _MAX_ELEMENTS:
                 break
@@ -428,9 +431,182 @@ def _cleanup(*paths: str) -> None:
                 pass
 
 
+# ── Capture en mémoire pour le modèle de vision ──────────────────────────────
+
+_PW_RENDERFULLCONTENT = 2
+
+
+def _print_window(hwnd: int):
+    """Contenu de la fenêtre via PrintWindow : fonctionne même si elle est
+    recouverte (par l'interface de Seraphim, typiquement). None si échec."""
+    import win32gui
+    import win32ui
+    from PIL import Image
+
+    if win32gui.IsIconic(hwnd):
+        return None
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    w, h = right - left, bottom - top
+    if w <= 0 or h <= 0:
+        return None
+    hdc = win32gui.GetWindowDC(hwnd)
+    src = win32ui.CreateDCFromHandle(hdc)
+    mem = src.CreateCompatibleDC()
+    bmp = win32ui.CreateBitmap()
+    try:
+        bmp.CreateCompatibleBitmap(src, w, h)
+        mem.SelectObject(bmp)
+        ok = ctypes.windll.user32.PrintWindow(hwnd, mem.GetSafeHdc(), _PW_RENDERFULLCONTENT)
+        info = bmp.GetInfo()
+        img = Image.frombuffer("RGB", (info["bmWidth"], info["bmHeight"]),
+                               bmp.GetBitmapBits(True), "raw", "BGRX", 0, 1).copy()
+    finally:
+        win32gui.DeleteObject(bmp.GetHandle())
+        mem.DeleteDC()
+        src.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hdc)
+    if not ok or img.convert("L").getextrema()[1] < 16:   # image vide / noire
+        return None
+    return img
+
+
+def grab(hwnd: int | None = None):
+    """Image PIL de la fenêtre `hwnd` (ou de tout le bureau) + origine écran (x, y)."""
+    import pywinauto  # noqa: F401 — process DPI-aware : coordonnées physiques
+    import win32gui
+    from PIL import ImageGrab
+
+    if hwnd:
+        try:
+            img = _print_window(hwnd)
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if img is not None:
+                return img, (left, top)
+            if right > left and bottom > top:
+                return ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True), (left, top)
+        except Exception as exc:
+            logger.debug("grab(%s) failed, full screen instead: %s", hwnd, exc)
+    x0, y0, _, _ = _screen_bounds()
+    return ImageGrab.grab(all_screens=True), (x0, y0)
+
+
+@dataclass
+class Shot:
+    """Capture envoyée au modèle de vision, avec de quoi revenir aux coordonnées écran."""
+    b64: str
+    width: int
+    height: int
+    origin: tuple[int, int]
+    scale: float           # taille image envoyée / taille réelle
+
+    def to_screen(self, x: float, y: float) -> tuple[int, int]:
+        x = min(max(x, 0), self.width - 1)
+        y = min(max(y, 0), self.height - 1)
+        return int(self.origin[0] + x / self.scale), int(self.origin[1] + y / self.scale)
+
+
+def _font(size: int):
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:          # Pillow < 10.1
+        return ImageFont.load_default()
+
+
+def annotate(img, origin: tuple[int, int], elements: list[Element]) -> None:
+    """Dessine sur l'image le cadre et le numéro [id] de chaque élément (« set of marks »)."""
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(img)
+    font = _font(max(12, img.width // 90))
+    ox, oy = origin
+    for e in elements:
+        cx, cy = e.x - ox, e.y - oy
+        if not (0 <= cx < img.width and 0 <= cy < img.height):
+            continue
+        if e.w and e.h:
+            x0, y0 = cx - e.w // 2, cy - e.h // 2
+            draw.rectangle((x0, y0, x0 + e.w, y0 + e.h), outline=(255, 0, 170), width=2)
+        else:
+            x0, y0 = cx - 6, cy - 6
+        label = str(e.id)
+        tx0, ty0, tx1, ty1 = draw.textbbox((0, 0), label, font=font)
+        lw, lh = tx1 - tx0 + 6, ty1 - ty0 + 4
+        lx = max(0, x0)
+        ly = y0 - lh if y0 >= lh else max(0, y0)     # au-dessus du cadre si possible
+        draw.rectangle((lx, ly, lx + lw, ly + lh), fill=(255, 0, 170))
+        draw.text((lx + 3 - tx0, ly + 2 - ty0), label, fill=(255, 255, 255), font=font)
+
+
+def screenshot_for_model(hwnd: int | None, elements: list[Element] | None = None,
+                         max_width: int = 1280) -> Shot:
+    """Capture la fenêtre cible, numérote les éléments dessus, réduit et encode en JPEG."""
+    import io
+
+    img, origin = grab(hwnd)
+    img = img.convert("RGB")
+    if elements:
+        annotate(img, origin, elements)
+    scale = min(1.0, max_width / img.width)
+    if scale < 1.0:
+        from PIL import Image
+
+        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return Shot(base64.b64encode(buf.getvalue()).decode(), img.width, img.height, origin, scale)
+
+
+# ── Vocabulaire de l'écran (aide la reconnaissance vocale) ───────────────────
+
+def screen_vocabulary(max_chars: int = 700) -> str:
+    """Noms visibles (fenêtres, fichiers, boutons…) pour guider Whisper :
+    l'utilisateur parle souvent de ce qu'il a sous les yeux."""
+    import pywinauto  # noqa: F401 — DPI-aware
+
+    words: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        s = re.sub(r"\s+", " ", s or "").strip()
+        if 2 <= len(s) <= 40 and "\\" not in s and s.lower() not in seen:
+            seen.add(s.lower())
+            words.append(s)
+
+    import win32gui
+
+    hwnd, title, titles = pick_target_window()
+    for t in [title] + titles[:6]:
+        for part in re.split(r"\s+[-–—:|·]\s+", t):
+            add(part)
+    # Éléments des 3 fenêtres les plus en avant (hors Seraphim et fenêtres réduites)
+    front = [hwnd] if hwnd else []
+    for h, t in list_windows():
+        if len(front) >= 3:
+            break
+        if h not in front and not _is_self(t) and not win32gui.IsIconic(h):
+            front.append(h)
+    for h in front:
+        try:
+            for e in _uia_elements(h):
+                add(e.name)
+        except Exception as exc:
+            logger.debug("screen_vocabulary UIA failed: %s", exc)
+    out = ""
+    for w in words:
+        if len(out) + len(w) + 2 > max_chars:
+            break
+        out += (", " if out else "") + w
+    return out
+
+
 # ── API publique : observer ──────────────────────────────────────────────────
 
-def observe(preferred_hwnd: int | None = None, force_ocr: bool = False) -> Observation:
+def observe(preferred_hwnd: int | None = None, force_ocr: bool = False,
+            ocr_fallback: bool = True) -> Observation:
+    """Fenêtre cible + éléments numérotés. `ocr_fallback=False` quand un modèle de
+    vision regarde déjà l'image (évite une capture PowerShell lente à chaque étape)."""
     import pywinauto  # noqa: F401 — rend le process DPI-aware (coordonnées physiques)
     import win32gui
 
@@ -442,7 +618,7 @@ def observe(preferred_hwnd: int | None = None, force_ocr: bool = False) -> Obser
         except Exception as exc:
             logger.debug("UIA walk failed: %s", exc)
 
-    if force_ocr or len(obs.elements) < _OCR_FALLBACK_THRESHOLD:
+    if force_ocr or (ocr_fallback and len(obs.elements) < _OCR_FALLBACK_THRESHOLD):
         png = ""
         try:
             png, _, origin = capture_screen()

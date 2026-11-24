@@ -52,12 +52,17 @@ class Transcriber:
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
 
-    def transcribe_file(self, path: str | Path) -> str:
-        """Transcrit un fichier audio (WAV, MP3, …)."""
+    def transcribe_file(self, path: str | Path, language: Optional[str] = None,
+                        initial_prompt: Optional[str] = None) -> str:
+        """Transcrit un fichier audio (WAV, MP3, …).
+
+        `initial_prompt` : vocabulaire attendu (ex : noms affichés à l'écran) pour
+        que Whisper écrive « README.md » plutôt qu'un mot qui sonne pareil."""
         segments, _ = self._model.transcribe(
             str(path),
-            language=self._language,
+            language=language or self._language,
             beam_size=5,
             vad_filter=True,
+            initial_prompt=initial_prompt or None,
         )
         return " ".join(seg.text.strip() for seg in segments).strip()

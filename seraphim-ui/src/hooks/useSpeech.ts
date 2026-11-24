@@ -17,7 +17,7 @@ interface ISpeechRecognition extends EventTarget {
     onerror: ((ev: ISpeechRecognitionErrorEvent) => void) | null;
 }
 interface ISpeechRecognitionEvent extends Event {
-    results: { [i: number]: { [i: number]: { transcript: string; confidence: number } }; length: number };
+    results: { [i: number]: { [i: number]: { transcript: string; confidence: number }; length: number }; length: number };
     resultIndex: number;
 }
 interface ISpeechRecognitionErrorEvent extends Event { error: string; }
@@ -117,7 +117,7 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
     const isPlayingRef = useRef(false);
 
     // STT refs
-    const recogRef          = useRef<ISpeechRecognition | null>(null);
+    const recorderRef       = useRef<MediaRecorder | null>(null);
     const wakeWordRecogRef  = useRef<ISpeechRecognition | null>(null);
     const wakeWordActiveRef = useRef(false);
 
@@ -257,9 +257,19 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
     // Keep refs current
     useEffect(() => { wakeWordLoopRef.current = wakeWordLoop; }, [wakeWordLoop]);
 
-    // ── STT (Web Speech API) ──────────────────────────────────────────────────
+    // ── STT : micro → Whisper local (backend /stt/transcribe) ─────────────────
+    // La reconnaissance vocale du navigateur (Web Speech API) ne marche pas dans
+    // la fenêtre Tauri (WebView2) : elle dépend d'un service cloud → erreur
+    // « network ». On enregistre donc le micro ici et on transcrit en local.
+    // Fin de l'enregistrement : 1,2 s de silence après la parole, 2e clic, ou 20 s.
 
-    const startListening = useCallback(() => {
+    const startListening = useCallback(async () => {
+        // Second clic pendant l'écoute : on arrête et on envoie ce qui a été dit
+        if (recorderRef.current) {
+            if (recorderRef.current.state === "recording") recorderRef.current.stop();
+            return;
+        }
+
         // Stop any in-progress wake word session without abort() —
         // null out onend so it won't restart itself after we kill it.
         if (wakeWordRecogRef.current) {
@@ -272,53 +282,86 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
         queueRef.current = []; isPlayingRef.current = false;
         stopCurrentAudio(); setVoiceError(null);
 
-        if (recogRef.current) {
-            try { recogRef.current.abort(); } catch (_) {}
-            recogRef.current = null;
-        }
-
-        const SR = getSR();
-        if (!SR) {
-            const msg = "SpeechRecognition non supporté. Utilise Chrome ou Edge.";
-            setVoiceError(msg); onError?.(msg); return;
-        }
-
-        const recog = new SR();
-        recog.lang = lang; recog.interimResults = false; recog.maxAlternatives = 1; recog.continuous = false;
-
-        recog.onstart  = () => { setVoiceError(null); setState("listening"); };
-        recog.onresult = (e: ISpeechRecognitionEvent) => {
-            const t = e.results[0][0].transcript.trim();
-            if (t) onTranscriptRef.current(t);
+        const fail = (msg: string) => {
+            setVoiceError(msg); onErrorRef.current?.(msg); setState("idle");
         };
-        recog.onerror = (e: ISpeechRecognitionErrorEvent) => {
-            const msg = e.error === "not-allowed"
-                ? "Accès micro refusé — autorise le micro dans les paramètres Windows."
-                : e.error === "no-speech" ? null : e.error;
-            if (msg) { setVoiceError(msg); onErrorRef.current?.(msg); }
+
+        let stream: MediaStream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true },
+            });
+        } catch (err) {
+            fail(`Accès micro impossible — autorise le micro dans les paramètres Windows (${(err as Error).name}).`);
+            wakeWordLoopRef.current();
+            return;
+        }
+
+        // Pendant que l'utilisateur parle : le backend relève les noms visibles à
+        // l'écran (pour bien transcrire « README.md »…) et charge Whisper.
+        void fetch(`${SERAPHIM_API}/stt/prime`, { method: "POST" }).catch(() => {});
+
+        const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+        const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        const chunks: Blob[] = [];
+        rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+
+        // Détection de silence (niveau RMS du micro)
+        const meterCtx = new AudioContext();
+        const analyser = meterCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        meterCtx.createMediaStreamSource(stream).connect(analyser);
+        const samples = new Float32Array(analyser.fftSize);
+        const started = performance.now();
+        let heard = false;
+        let lastLoud = started;
+        const timer = window.setInterval(() => {
+            analyser.getFloatTimeDomainData(samples);
+            let sum = 0;
+            for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+            const rms = Math.sqrt(sum / samples.length);
+            const now = performance.now();
+            if (rms > 0.02) { heard = true; lastLoud = now; }
+            const done = (heard && now - lastLoud > 1200) || (!heard && now - started > 7000) || now - started > 20000;
+            if (done && rec.state === "recording") rec.stop();
+        }, 100);
+
+        rec.onstop = async () => {
+            window.clearInterval(timer);
+            stream.getTracks().forEach((t) => t.stop());
+            void meterCtx.close();
+            recorderRef.current = null;
             setState("idle");
-        };
-        recog.onend = () => {
-            setState((s) => (s === "listening" ? "idle" : s));
+            if (heard && chunks.length > 0) {
+                try {
+                    const form = new FormData();
+                    form.append("audio", new Blob(chunks, { type: rec.mimeType || "audio/webm" }), "voice.webm");
+                    const res = await fetch(`${SERAPHIM_API}/stt/transcribe`, { method: "POST", body: form });
+                    if (!res.ok) throw new Error(`STT ${res.status}`);
+                    const { text } = (await res.json()) as { text?: string };
+                    if (text?.trim()) onTranscriptRef.current(text.trim());
+                } catch (err) {
+                    fail(`Transcription impossible : ${(err as Error).message}`);
+                }
+            }
             wakeWordLoopRef.current(); // resume wake word loop after STT ends
         };
 
-        recogRef.current = recog;
-        try { recog.start(); } catch (err) {
-            const msg = `Impossible de démarrer : ${(err as Error).message}`;
-            setVoiceError(msg); onError?.(msg); setState("idle");
-        }
-    }, [lang, stopCurrentAudio, onError]);
+        recorderRef.current = rec;
+        rec.start(250);
+        setState("listening");
+    }, [stopCurrentAudio]);
 
-    useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
+    useEffect(() => { startListeningRef.current = () => { void startListening(); }; }, [startListening]);
 
     const stopListening = useCallback(() => {
-        recogRef.current?.stop(); setState("idle");
+        if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+        else setState("idle");
     }, []);
 
     const toggleListening = useCallback(() => {
         if (state === "listening") stopListening();
-        else startListening();
+        else void startListening();
     }, [state, startListening, stopListening]);
 
     // ── Wake word toggle ──────────────────────────────────────────────────────
@@ -348,7 +391,7 @@ export function useSpeech({ lang = "fr-FR", onTranscript, onError }: UseSpeechOp
             wakeWordRecogRef.current.onend = null;
             try { wakeWordRecogRef.current.abort(); } catch (_) {}
         }
-        try { recogRef.current?.abort(); } catch (_) {}
+        try { recorderRef.current?.stop(); } catch (_) {}
         queueRef.current = []; isPlayingRef.current = false;
         stopCurrentAudio(); audioCtxRef.current?.close();
     }, [stopCurrentAudio]);

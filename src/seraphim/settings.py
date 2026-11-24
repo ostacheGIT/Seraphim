@@ -124,7 +124,11 @@ class DesktopSettings(BaseModel):
     """Agent « desktop » : contrôle du PC par observation de l'écran."""
     max_steps: int = 15
     settle_delay: float = 0.8        # pause après chaque action avant de ré-observer (s)
-    vision_model: str = ""           # modèle Ollama de vision optionnel, ex: "qwen2.5vl:3b"
+    # Modèle Ollama de vision : l'agent voit une capture de la fenêtre à chaque étape.
+    # Vide ou non installé → mode texte seul (UI Automation + OCR).
+    vision_model: str = "qwen2.5vl:3b"
+    vision_max_width: int = 1280     # largeur max de la capture envoyée au modèle (px)
+    vision_num_ctx: int = 8192       # contexte du modèle de vision (image ≈ 1 200 tokens)
     confirm_risky: bool = True       # s'arrêter avant supprimer/payer/envoyer non demandés
     llm_timeout: float = 300.0       # délai max d'une décision du LLM (s) — CPU lent
 

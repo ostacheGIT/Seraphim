@@ -54,6 +54,7 @@ dependencies = [
     "ddgs>=9.14.1",
     "rapidfuzz>=3.14.5",
     "pywinauto>=0.6.9; sys_platform == 'win32'",
+    "pillow>=10.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
 

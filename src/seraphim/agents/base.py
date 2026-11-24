@@ -193,6 +193,38 @@ def _build_open_do(app: str, do_text: str) -> tuple[str, dict]:
     return ("app_manager", kwargs)
 
 
+async def _open_on_screen(target: str, query: str) -> str | None:
+    """« ouvre X » quand X n'est pas une application : chercher X à l'écran
+    (fichier, dossier, lien, icône…) et l'ouvrir. None si introuvable."""
+    import sys
+    if sys.platform != "win32" or not target.strip():
+        return None
+    try:
+        from seraphim.agents.desktop import risky_family
+        from seraphim.desktop.activate import locate_and_activate
+        from seraphim.settings import settings
+
+        out = await locate_and_activate(
+            target, "open", base_url=settings.engine.base_url,
+            forbid=lambda name: risky_family(name, query),
+        )
+        return out.message if out.success or out.message.startswith("⛔") else None
+    except Exception as exc:
+        logging.getLogger(__name__).debug("open on screen failed: %s", exc)
+        return None
+
+
+async def _run_direct_skill(skill, skill_name: str, kwargs: dict, query: str) -> str:
+    """Exécute un DIRECT_PATTERN ; si « ouvre X » échoue comme application,
+    on cherche X à l'écran."""
+    result = await skill.run(**kwargs)
+    if not result.success and skill_name == "app_manager" and kwargs.get("action") == "open":
+        on_screen = await _open_on_screen(kwargs.get("app", ""), query)
+        if on_screen:
+            return on_screen
+    return result.output if result.output else (result.error or "(no output)")
+
+
 DIRECT_PATTERNS = [
     # "ouvre Chrome et va sur youtube.com" / "lance Notepad et écris Bonjour"
     (re.compile(
@@ -904,8 +936,7 @@ class ChatAgent(BaseAgent):
                     break  # do_text references generated content → fall through to LLM
                 skill = SKILL_REGISTRY.get(skill_name)
                 if skill:
-                    result = await skill.run(**kwargs)
-                    return result.output if result.output else (result.error or "(no output)")
+                    return await _run_direct_skill(skill, skill_name, kwargs, query)
 
         return None
 
@@ -1430,8 +1461,7 @@ class ReActAgent(BaseAgent):
                     if not skill:
                         continue  # skill not found → try next pattern
                     try:
-                        result = await skill.run(**kwargs)
-                        return result.output if result.output else (result.error or "(no output)")
+                        return await _run_direct_skill(skill, skill_name, kwargs, query)
                     except Exception as e:
                         return f"Erreur : {e}"
 

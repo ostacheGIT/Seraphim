@@ -33,13 +33,33 @@ _DESKTOP_RE = re.compile(
     r"(?:double[-\s]?)?clique[rz]?|click|appuie\s+sur|"
     r"tape\s+(?:dans|sur)|écris\s+dans|remplis|coche[rz]?|décoche[rz]?|sélectionne[rz]?\s+(?:le|la|l['’]|les)|"
     r"fais\s+défiler|scrolle?|"
-    r"(?:sur|à|de)\s+(?:mon|l['’]|ton)\s*écran|"
-    r"(?:regarde|analyse|lis|vois|décris)\s+(?:mon\s+|l['’]\s*|ce\s+qu['’]il\s+y\s+a\s+(?:sur|à)\s+(?:mon\s+|l['’]\s*))écran|"
+    r"(?:sur|à|de)\s+(?:mon|l['’]|ton)\s*[ée]cran|"
+    r"(?:regarde|analyse|lis|vois|décris)\s+(?:mon\s+|l['’]\s*|ce\s+qu['’]il\s+y\s+a\s+(?:sur|à)\s+(?:mon\s+|l['’]\s*))[ée]cran|"
     r"prends?\s+(?:le\s+)?contrôle|"
-    r"dans\s+(?:la|cette)\s+fenêtre|"
+    r"dans\s+(?:la|cette)\s+fen[êe]tre|"
+    r"(?:que|qu['’]on)\s+(?:tu\s+)?vois|qu['’]on\s+voit|"
     r"à\s+ma\s+place|"
     r"utilise\s+(?:la\s+souris|le\s+clavier)"
     r")",
+    re.I,
+)
+
+# Références implicites à ce qui est affiché (« c'est quoi cette erreur ? »,
+# « aide-moi avec ce popup », « résume cette page ») → l'agent desktop regarde l'écran.
+_SCREEN_REF_RE = re.compile(
+    r"\b(?:ce|cet|cette|ces)\s+(?:"
+    r"erreurs?|messages?|pop[- ]?ups?|fen[êe]tres?|pages?|boutons?|onglets?|notifications?|"
+    r"bo[iî]tes?\s+de\s+dialogue|images?|photos?|vid[ée]os?|graphiques?|sch[ée]mas?|tableaux?|"
+    r"mails?|e-mails?|formulaires?|sites?|articles?|liens?|menus?|ic[ôo]nes?|alertes?|"
+    r"avertissements?|warnings?|captchas?|[ée]crans?|documents?|diapos?|slides?|"
+    r"fichiers?|dossiers?|projets?|codes?|textes?|paragraphes?|phrases?|lignes?|"
+    r"logiciels?|applis?|applications?|programmes?|jeux|jeu|conversations?|discussions?|"
+    r"commentaires?|posts?|produits?|prix|r[ée]sultats?|graphes?|courbes?|cellules?|colonnes?"
+    r")\b"
+    r"|\b(?:ce\s+que\s+je\s+vois|ce\s+qui\s+s['’]affiche|ce\s+qui\s+est\s+affich[ée]|"
+    r"(?:à|a|sur)\s+l['’]\s*[ée]cran|qu['’]est[- ]ce\s+que\s+je\s+(?:regarde|fais)|"
+    r"(?:what(?:['’]s|\s+is)\s+on\s+(?:my|the)\s+screen)|"
+    r"this\s+(?:error|popup|window|page|button|message|dialog))\b",
     re.I,
 )
 
@@ -170,6 +190,22 @@ class RoutingDecision:
     reason: str         # explication lisible (debug)
 
 
+def _opens_something_on_screen(q: str) -> bool:
+    from seraphim.agents.desktop import parse_simple_order
+
+    parsed = parse_simple_order(q)
+    if not parsed or parsed[0] != "open":
+        return False
+    try:
+        from seraphim.desktop.activate import clean_target
+        from seraphim.skills.system.apps import _APP_MAP
+
+        target = clean_target(parsed[1]).lower()
+        return target not in _APP_MAP
+    except Exception:
+        return True
+
+
 def route(query: str) -> RoutingDecision:
     """
     Analyse la requête et retourne l'agent + skill optimal.
@@ -188,6 +224,15 @@ def route(query: str) -> RoutingDecision:
     # 0c. Tâches visuelles (regarder l'écran, cliquer, remplir…) → agent desktop
     if _DESKTOP_RE.search(q):
         return RoutingDecision(agent="desktop", skill=None, reason="screen-based desktop task")
+    # Le contenu n'est pas collé dans le message (sinon c'est lui qu'il faut lire)
+    if "\n" not in q and len(q) < 200 and _SCREEN_REF_RE.search(q):
+        return RoutingDecision(agent="desktop", skill=None, reason="refers to what is on screen")
+
+    # 0d. « ouvre / ouvrir X » avec une seule cible qui n'est pas une application
+    #     connue → agent desktop : il cherche X à l'écran (fichier, lien, icône…)
+    #     puis, s'il ne le voit pas, essaie de le lancer comme application.
+    if _opens_something_on_screen(q):
+        return RoutingDecision(agent="desktop", skill=None, reason="open a visible item")
 
     # 1. Commandes système directes → react agent (il a les DIRECT_PATTERNS)
     if _SYSTEM_RE.search(q):

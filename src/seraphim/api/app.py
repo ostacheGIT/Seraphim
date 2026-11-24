@@ -5,10 +5,12 @@ Seraphim API — FastAPI application.
 import json
 import logging
 import os
+import time
 import re
 import tempfile
 import uuid
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
@@ -771,6 +773,14 @@ async def _resolve_agent_name(req: ChatRequest) -> str:
     Le learned router peut override le choix statique si assez de traces.
     Sinon on respecte le choix explicite.
     """
+    # Action proposée par l'agent bureau au tour précédent : « oui » la valide,
+    # tout autre message l'annule (pour qu'un « ok » plus tard ne la déclenche pas).
+    from seraphim.desktop import pending
+    if pending.get_pending(req.session_id):
+        if pending.is_confirmation(req.query):
+            return "desktop"
+        pending.clear_pending(req.session_id)
+
     if req.agent in ("auto", "", None):
         decision = auto_route(req.query)
         if decision.agent == "chat":
@@ -823,6 +833,21 @@ async def _enrich_agent_context(
                 parts.append("Documents pertinents de la base de connaissances:\n\n" + format_context(results))
         except Exception as exc:
             logger.debug("RAG retrieval failed: %s", exc)
+
+    # Ce que l'utilisateur a devant lui (titres de fenêtres, sans capture : quasi gratuit)
+    if sys.platform == "win32":
+        try:
+            from seraphim.desktop.computer import pick_target_window
+            _, title, titles = await asyncio.to_thread(pick_target_window)
+            if title:
+                others = [t[:60] for t in titles if t != title and t.lower() != "seraphim"][:5]
+                parts.append(
+                    f"[Écran de l'utilisateur — contexte, n'en parle que si c'est utile]\n"
+                    f"Fenêtre active : « {title} »"
+                    + (f" ; autres fenêtres : {', '.join(f'« {t} »' for t in others)}" if others else "")
+                )
+        except Exception as exc:
+            logger.debug("screen context failed: %s", exc)
 
     # Language instruction — always explicit to avoid small-model confusion
     lang = _detect_language(query)
@@ -1428,8 +1453,45 @@ async def stt_status():
         return {"available": False, "model": None}
 
 
+# Vocabulaire de l'écran, relevé pendant que l'utilisateur parle (/stt/prime)
+_stt_vocab_task: asyncio.Task | None = None
+_stt_vocab_time = 0.0
+_STT_PROMPT_HEAD = "Seraphim. Ouvre README.md, clique sur le bouton, ferme la fenêtre."
+
+
+async def _screen_vocab() -> str:
+    if sys.platform != "win32":
+        return ""
+    from seraphim.desktop.computer import screen_vocabulary
+    return await asyncio.to_thread(screen_vocabulary)
+
+
+@app.post("/stt/prime")
+async def stt_prime():
+    """Appelé quand le micro s'ouvre : relève les noms visibles à l'écran et
+    charge Whisper pendant que l'utilisateur parle."""
+    global _stt_vocab_task, _stt_vocab_time
+    _stt_vocab_task = asyncio.create_task(_screen_vocab())
+    _stt_vocab_time = time.time()
+    asyncio.create_task(_get_whisper())
+    return {"ok": True}
+
+
+async def _stt_prompt() -> str:
+    task = _stt_vocab_task
+    vocab = ""
+    try:
+        if task is not None and time.time() - _stt_vocab_time < 60:
+            vocab = await asyncio.wait_for(asyncio.shield(task), timeout=3)
+        else:
+            vocab = await asyncio.wait_for(_screen_vocab(), timeout=3)
+    except Exception as exc:
+        logger.debug("STT vocabulary unavailable: %s", exc)
+    return f"{_STT_PROMPT_HEAD} {vocab}".strip()
+
+
 @app.post("/stt/transcribe")
-async def stt_transcribe(audio: UploadFile = File(...)):
+async def stt_transcribe(audio: UploadFile = File(...), language: str = "fr"):
     """Transcrit un fichier audio avec faster-whisper (local, offline).
 
     Accepte audio/webm, audio/wav, audio/mp3, etc.
@@ -1454,7 +1516,12 @@ async def stt_transcribe(audio: UploadFile = File(...)):
 
     try:
         loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, lambda: t.transcribe_file(tmp_path))
+        prompt = await _stt_prompt()
+        lang = (language or "").strip().lower() or None
+        if lang == "auto":
+            lang = None
+        text = await loop.run_in_executor(
+            None, lambda: t.transcribe_file(tmp_path, language=lang, initial_prompt=prompt))
     finally:
         try:
             os.unlink(tmp_path)
